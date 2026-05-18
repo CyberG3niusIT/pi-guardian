@@ -23,6 +23,7 @@ from app.models.skill_models import SkillExecutionContext, SkillResult
 from app.models.tool_models import ToolExecutionContext
 from app.router.classifier import select_model_for_prompt
 from app.router.errors import RouterApiError
+from app.router.inference.wrapper import TIMEOUT_AGENT
 from app.router.ollama_client import generate_with_ollama
 from app.skills.executor import executor as skill_executor
 from app.tools.executor import ToolExecutor
@@ -115,6 +116,7 @@ class AgentRuntime:
                     prompt=prompt,
                     request_id=run_id,
                     stream=False,
+                    timeout=TIMEOUT_AGENT,
                 )
             except RouterApiError as exc:
                 error = f"Ollama-Fehler: {exc.code} - {exc.message}"
@@ -463,6 +465,11 @@ class AgentRuntime:
             used_model=model,
         )
         record_agent_run(request, response)
+        try:
+            from app.memory.agent_memory import extract_from_run
+            extract_from_run(response.run_id)
+        except Exception:
+            pass
         return response
 
 

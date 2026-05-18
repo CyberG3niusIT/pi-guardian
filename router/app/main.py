@@ -32,12 +32,16 @@ except OSError as exc:
 for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
     logging.getLogger(name).propagate = True
 
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlmodel import Session, select
 
 from app.api.routes_agents import router as agents_router
 from app.api.routes_actions import router as actions_router
+from app.api.routes_agent_memory import router as agent_memory_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_memory import router as memory_router
 from app.api.routes_skills import router as skills_router
@@ -56,7 +60,7 @@ from app.router.model_registry import sync_model_registry
 from app.api.routes_model_pull import router as model_pull_router
 from app.router.log_reader import read_logs
 from app.router.ollama_client import post_to_ollama, stream_to_ollama
-from app.router.ollama_models import fetch_model_names, fetch_models, fetch_raw_tags
+from app.router.ollama_models import delete_ollama_model, fetch_model_names, fetch_models, fetch_raw_tags
 from app.router.service import route_prompt
 from app.router.settings_manager import (
     RouterSettingsUpdate,
@@ -67,6 +71,7 @@ from app.router.settings_manager import (
 from app.router.settings_reader import get_settings
 from app.router.system_status import get_service_status
 from app.api.routes_model_registry import router as model_registry_router
+from app.router.inference import wrapper as inference_wrapper
 from app.schemas.request_models import ModelSelectionRequest, RouteRequest
 from app.schemas.response_models import (
     LogEntry,
@@ -81,15 +86,24 @@ from app.schemas.response_models import (
 )
 
 
+@asynccontextmanager
+async def lifespan(app_: FastAPI) -> AsyncGenerator[None, None]:
+    await inference_wrapper.init()
+    yield
+    await inference_wrapper.close()
+
+
 app = FastAPI(
     title="PI Guardian Model Router",
     version="0.1.0",
     description="Lokaler FastAPI-Router für Ollama-Modelle auf dem Raspberry Pi",
+    lifespan=lifespan,
 )
 
 app.include_router(clients_router)
 app.include_router(auth_router)
 app.include_router(agents_router)
+app.include_router(agent_memory_router)
 app.include_router(skills_router)
 app.include_router(actions_router)
 app.include_router(memory_router)
@@ -109,6 +123,7 @@ ADMIN_ROUTES = {
     "/models/select",
     "/models/registry",
     "/models/pull",
+    "/models/delete",
     "/settings",
     "/status/service",
 }
@@ -384,6 +399,15 @@ async def logs(limit: int = Query(default=50, ge=1, le=200)) -> list[LogEntry]:
 )
 async def models() -> list[OllamaModel]:
     return [OllamaModel(**m) for m in await fetch_models()]
+
+
+@app.delete(
+    "/models/delete/{model_name:path}",
+    status_code=204,
+    dependencies=[Depends(require_access("/models/delete"))],
+)
+async def model_delete(model_name: str) -> None:
+    await delete_ollama_model(model_name)
 
 
 @app.get(
