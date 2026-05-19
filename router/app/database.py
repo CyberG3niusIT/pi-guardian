@@ -34,6 +34,7 @@ def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     _ensure_client_columns()
     _ensure_route_history_columns()
+    _ensure_skill_columns()
     _bootstrap_reference_data()
     _bootstrap_admin_client()
     _bootstrap_model_registry()
@@ -90,6 +91,25 @@ def _ensure_client_columns() -> None:
             if column_name not in existing:
                 conn.execute(text(ddl))
                 logger.info("Client-Spalte ergänzt: %s", column_name)
+
+
+def _ensure_skill_columns() -> None:
+    expected_columns = {
+        "skill_type": "ALTER TABLE skillrecord ADD COLUMN skill_type VARCHAR NOT NULL DEFAULT 'system'",
+        "prompt_template": "ALTER TABLE skillrecord ADD COLUMN prompt_template VARCHAR",
+        "preferred_model": "ALTER TABLE skillrecord ADD COLUMN preferred_model VARCHAR",
+        "source_url": "ALTER TABLE skillrecord ADD COLUMN source_url VARCHAR",
+    }
+
+    with engine.begin() as conn:
+        existing = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(skillrecord)")).fetchall()
+        }
+        for column_name, ddl in expected_columns.items():
+            if column_name not in existing:
+                conn.execute(text(ddl))
+                logger.info("Skill-Spalte ergänzt: %s", column_name)
 
 
 def _bootstrap_reference_data() -> None:

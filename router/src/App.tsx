@@ -48,6 +48,9 @@ export default function App() {
         return <History />;
       case 'memory':
         return <Memory />;
+      case 'skills':
+        // Skills page reuses the Agents component's skill section for now
+        return <Agents />;
       default:
         return <Dashboard connectionState={health.state} lastCheck={health.lastCheck} healthError={health.error} onRefresh={health.refresh} />;
     }

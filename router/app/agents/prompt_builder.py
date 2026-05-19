@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from app.models.agent_models import AgentDefinition, AgentRunState
 from app.actions.registry import list_action_names
-from app.skills.registry import list_skill_names
+from app.skills.registry import list_skills
 from app.tools.registry import list_tools
+from app.memory.agent_memory import get_agent_memories
 
 
 def _render_history(state: AgentRunState) -> str:
@@ -30,11 +31,29 @@ def _render_tool_catalog(agent: AgentDefinition) -> str:
 
 def _render_skill_catalog(agent: AgentDefinition) -> str:
     lines: list[str] = []
-    for skill_name in list_skill_names():
-        if skill_name not in agent.settings.policy.allowed_skills:
+    for skill in list_skills():
+        if skill.name not in agent.settings.policy.allowed_skills:
             continue
-        lines.append(f"- {skill_name}")
+        lines.append(f"- {skill.name}: {skill.description}")
     return "\n".join(lines) if lines else "- Keine Skills registriert."
+
+
+def _render_memory(agent: AgentDefinition) -> str:
+    memories = get_agent_memories(agent.name, limit=5)
+    if not memories:
+        return "- Keine gespeicherten Erfahrungen."
+    lines = []
+    type_labels = {
+        "finding": "BEOBACHTUNG",
+        "failure": "FEHLERMUSTER",
+        "feedback": "FEEDBACK",
+        "instruction": "HINWEIS",
+    }
+    for m in memories:
+        label = type_labels.get(m.memory_type, m.memory_type.upper())
+        confirmed = f" (bestätigt: {m.times_confirmed}x)" if m.times_confirmed > 0 else ""
+        lines.append(f"- [{label}]{confirmed} {m.content}")
+    return "\n".join(lines)
 
 
 def _render_action_catalog(agent: AgentDefinition) -> str:
@@ -49,51 +68,70 @@ def _render_action_catalog(agent: AgentDefinition) -> str:
 def build_system_prompt(agent: AgentDefinition) -> str:
     settings = agent.settings
     policy = settings.policy
-    lines = [
-        f"Du bist {agent.name}, ein interner PI-Guardian-Agent.",
-        f"Beschreibung: {agent.description}",
-        f"Agent-Typ: {agent.agent_type}",
-        f"Aktiv: {settings.active}",
-        f"Read-only: {settings.read_only}",
-        f"Bevorzugtes Modell: {settings.preferred_model or 'nicht gesetzt'}",
-        f"Max Steps: {settings.max_steps}",
-        f"Timeout Sekunden: {settings.timeout_seconds or 'nicht gesetzt'}",
-        "Policy:",
-        f"- Erlaubte Tools: {', '.join(policy.allowed_tools) if policy.allowed_tools else 'keine'}.",
-        f"- Logs erlaubt: {policy.can_use_logs}",
-        f"- Services erlaubt: {policy.can_use_services}",
-        f"- Docker erlaubt: {policy.can_use_docker}",
-        f"- Skills erlaubt: {policy.allowed_skills if policy.allowed_skills else 'keine'}",
-        f"- Actions erlaubt: {policy.allowed_actions if policy.allowed_actions else 'keine'}",
-        f"- Actions vorschlagen erlaubt: {policy.can_propose_actions}",
-        f"- Maximale Tool-Aufrufe: {policy.max_tool_calls or 'nicht gesetzt'}",
-        "Verhalten:",
-        f"- Analysemodus: {settings.behavior.analysis_mode}",
-        f"- Antworttiefe: {settings.behavior.response_depth}",
-        f"- Priorisierung: {settings.behavior.prioritization_style}",
-        f"- Unsicherheitsverhalten: {settings.behavior.uncertainty_behavior}",
-        f"- Risikoempfindlichkeit: {settings.behavior.risk_sensitivity}",
-        "Persönlichkeit:",
-        f"- Stil: {settings.personality.style}",
-        f"- Ton: {settings.personality.tone}",
-        f"- Direktheit: {settings.personality.directness}",
-        f"- Ausführlichkeit: {settings.personality.verbosity}",
-        f"- Technische Strenge: {settings.personality.technical_strictness}",
-        "Regeln:",
-        "- Arbeite ausschließlich lesend.",
-        f"- Erlaubte Tools: {', '.join(agent.allowed_tools) if agent.allowed_tools else 'keine'}.",
-        "- Keine Shell, keine Schreibvorgänge, keine Neustarts, keine Änderungen.",
-        "- Wenn ein Tool nötig ist, antworte ausschließlich mit einem JSON-Objekt im Format "
-        '{"tool_name":"...","arguments":{...},"reason":"..."}.',
-        "- Wenn ein Skill nötig ist, antworte ausschließlich mit einem JSON-Objekt im Format "
-        '{"skill_name":"...","arguments":{...},"reason":"..."}.',
-        "- Wenn eine Action vorgeschlagen werden soll, antworte ausschließlich mit einem JSON-Objekt im Format "
-        '{"action_name":"...","arguments":{...},"reason":"...","target":"...","requires_approval":true}.',
-        "- Wenn genügend Informationen vorliegen, antworte in Klartext ohne JSON.",
-        "- Priorisiere Auffälligkeiten, nenne Risiken klar und empfehle nur Maßnahmen.",
+
+    # Tool list with descriptions
+    tool_lines = [
+        f"  {tool.name}: {tool.description}"
+        for tool in list_tools()
+        if tool.name in agent.allowed_tools
     ]
+
+    # Skill list with descriptions
+    skill_lines = [
+        f"  {skill.name}: {skill.description}"
+        for skill in list_skills()
+        if skill.name in policy.allowed_skills
+    ]
+
+    # Action list
+    action_lines = [
+        f"  {name}"
+        for name in list_action_names()
+        if name in policy.allowed_actions
+    ]
+
+    lines = [
+        f"Du bist {agent.name}, ein PI-Guardian-Monitoring-Agent auf einem Raspberry Pi.",
+        f"Aufgabe: {agent.description}",
+        "",
+        "Verfügbare Tools:",
+    ]
+    lines.extend(tool_lines or ["  (keine)"])
+
+    lines += ["", "Verfügbare Skills:"]
+    lines.extend(skill_lines or ["  (keine)"])
+
+    if action_lines:
+        lines += ["", "Verfügbare Actions (Freigabe immer erforderlich):"]
+        lines.extend(action_lines)
+
+    lines += [
+        "",
+        "Ausgaberegeln:",
+        '- Tool aufrufen → nur dieses JSON ausgeben: {"tool_name":"NAME","arguments":{},"reason":"WARUM"}',
+        '- Skill aufrufen → nur dieses JSON ausgeben: {"skill_name":"NAME","arguments":{},"reason":"WARUM"}',
+    ]
+    if policy.can_propose_actions:
+        lines.append(
+            '- Action vorschlagen → nur dieses JSON ausgeben: '
+            '{"action_name":"NAME","arguments":{},"reason":"WARUM","target":"DIENST","requires_approval":true}'
+        )
+    lines += [
+        "- Kein Text vor oder nach dem JSON-Objekt.",
+        "- Abschließende Antwort als normaler Text ohne JSON.",
+    ]
+
+    if agent.name == "kids_controller_supervisor":
+        lines += [
+            "- Fuer diesen Agenten gilt: Im ersten inhaltlichen Schritt zuerst den Skill "
+            '"kids_controller_repetition_review" aufrufen, keine freie Analyse als Erstantwort.',
+            "- Nach einem erfolgreichen Skill-Resultat nur 1-2 kurze deutsche Saetze als Abschluss.",
+            "- Keine Rubriken, keine LOGIC-Bloecke, keine Wiederholungen, keine Aufzaehlungen.",
+        ]
+
     if settings.custom_instruction:
-        lines.extend(["Benutzerhinweis:", settings.custom_instruction])
+        lines += ["", "Arbeitshinweis:", settings.custom_instruction]
+
     return "\n".join(lines)
 
 
@@ -104,6 +142,7 @@ def build_prompt(
 ) -> str:
     return (
         f"=== SYSTEM ===\n{agent.system_prompt}\n\n"
+        f"=== GEDÄCHTNIS ===\n{_render_memory(agent)}\n\n"
         f"=== TOOL CATALOG ===\n{_render_tool_catalog(agent)}\n\n"
         f"=== SKILL CATALOG ===\n{_render_skill_catalog(agent)}\n\n"
         f"=== ACTION CATALOG ===\n{_render_action_catalog(agent)}\n\n"
@@ -116,6 +155,7 @@ def build_prompt(
         f"=== USER REQUEST ===\n{user_prompt}\n\n"
         "=== OUTPUT RULES ===\n"
         "- Wenn du ein Tool aufrufen willst, antworte nur mit dem JSON-Objekt.\n"
+        "- Wenn du einen Skill aufrufen willst, antworte nur mit dem JSON-Objekt.\n"
         "- Wenn du fertig bist, antworte in normalem Klartext ohne JSON.\n"
         "- Keine weiteren Metadaten, keine Codeblöcke, keine Prosa vor oder nach dem JSON.\n"
     )

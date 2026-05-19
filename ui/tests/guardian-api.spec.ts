@@ -1,145 +1,75 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  buildGuardianApiUrl,
-  fetchGuardianHistory,
-  fetchGuardianStatus,
-} from '../src/api/client';
+import { fetchHealth, fetchRouteHistory, sendRoute } from '../src/api/client';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('guardian api client', () => {
-  it('joins the proxy prefix exactly once for health requests', async () => {
+describe('router api client', () => {
+  it('uses the nginx /api proxy prefix for health requests', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          status: 'ok',
-          component: 'guardian',
-          version: '0.1.0',
-          checked_at: '2026-04-21T18:30:00.000Z',
-          router: {
-            checked_at: '2026-04-21T18:30:00.000Z',
-            base_url: 'http://127.0.0.1:8071',
-            health_path: '/health',
-            status_path: '/status/service',
-            access_state: 'reachable',
-            readiness_state: 'healthy',
-            severity: 'ok',
-            healthy: true,
-            degraded: false,
-            incomplete: false,
-            auth_required: false,
-            reachable: true,
-            health: null,
-            service_status: null,
-            findings: [],
-            notes: [],
-            probe: {
-              router_base_url: 'http://127.0.0.1:8071',
-            },
-          },
-          router_evaluation: {
-            status: 'ok',
-            summary: 'Router is healthy.',
-            checked_at: '2026-04-21T18:30:00.000Z',
-            reasons: [],
-            router: {
-              checked_at: '2026-04-21T18:30:00.000Z',
-              base_url: 'http://127.0.0.1:8071',
-              health_path: '/health',
-              status_path: '/status/service',
-              access_state: 'reachable',
-              readiness_state: 'healthy',
-              severity: 'ok',
-              healthy: true,
-              degraded: false,
-              incomplete: false,
-              auth_required: false,
-              reachable: true,
-              health: null,
-              service_status: null,
-              findings: [],
-              notes: [],
-              probe: {
-                router_base_url: 'http://127.0.0.1:8071',
-              },
-            },
-          },
-          system: {
-            checked_at: '2026-04-21T18:30:00.000Z',
-            hostname: 'guardian-test',
-            running_as_root: true,
-            process_pid: 1234,
-            process_name: 'guardian',
-            notes: [],
-            errors: [],
-          },
-          system_evaluation: {
-            status: 'ok',
-            summary: 'System is healthy.',
-            checked_at: '2026-04-21T18:30:00.000Z',
-            reasons: [],
-            system: {
-              checked_at: '2026-04-21T18:30:00.000Z',
-              hostname: 'guardian-test',
-              running_as_root: true,
-              process_pid: 1234,
-              process_name: 'guardian',
-              notes: [],
-              errors: [],
-            },
-          },
-          evaluation: {
-            status: 'ok',
-            summary: 'Guardian is healthy.',
-            checked_at: '2026-04-21T18:30:00.000Z',
-            reasons: [],
-            router: {},
-            system: {},
-          },
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ),
+      new Response(JSON.stringify({ status: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
     );
 
     vi.stubGlobal('fetch', fetchMock);
 
-    await fetchGuardianStatus('/api/guardian');
+    await fetchHealth();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/guardian/health',
+      '/api/health',
       expect.objectContaining({
         credentials: 'include',
       }),
     );
   });
 
-  it('builds history urls without duplicating the prefix', async () => {
+  it('builds history urls at the router root behind /api', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          checked_at: '2026-04-21T18:30:00.000Z',
-          limit: 8,
-          snapshots: [],
-          transitions: [],
-          alerts: [],
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ),
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
     );
 
     vi.stubGlobal('fetch', fetchMock);
 
-    await fetchGuardianHistory(8, '/api/guardian');
+    await fetchRouteHistory(8);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/guardian/history?limit=8',
+      '/api/history?limit=8',
       expect.objectContaining({
         credentials: 'include',
       }),
     );
-    expect(buildGuardianApiUrl('/api/guardian', '/health')).toBe('/api/guardian/health');
+  });
+
+  it('sends route requests with the active backend schema', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ request_id: 'test', response: 'ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await sendRoute('Diagnose Router', 'qwen2.5-coder:1.5b');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/route',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        body: JSON.stringify({
+          prompt: 'Diagnose Router',
+          preferred_model: 'qwen2.5-coder:1.5b',
+          stream: false,
+        }),
+      }),
+    );
   });
 });

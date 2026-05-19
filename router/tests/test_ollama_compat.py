@@ -18,7 +18,12 @@ def _collect_stream_body(response) -> list[bytes]:
 
 def test_select_model_for_prompt_uses_large_model_for_complex_keywords():
     model = select_model_for_prompt("Bitte architektur analysieren und debuggen")
-    assert model
+    assert model == "qwen2.5-coder:3b"
+
+
+def test_select_model_for_prompt_uses_default_model_for_simple_prompt():
+    model = select_model_for_prompt("Antworte nur mit OK")
+    assert model == "qwen2.5-coder:1.5b"
 
 
 def test_extract_text_content_handles_string_and_part_list():

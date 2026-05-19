@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Card } from '../components/Card';
 import { Layout } from '../components/Layout';
 import {
@@ -52,6 +53,33 @@ function formatDateTime(value?: string | null): string {
   } catch {
     return value;
   }
+}
+
+function EmptyCollectionState({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="empty-state">
+      <div className="empty-state__icon">□</div>
+      <div className="empty-state__title">{title}</div>
+      <div className="empty-state__sub">{description}</div>
+    </div>
+  );
+}
+
+function MetaItem({
+  label,
+  value,
+  plain = false,
+}: {
+  label: string;
+  value: ReactNode;
+  plain?: boolean;
+}) {
+  return (
+    <div className="entity-card__meta-item">
+      <span className="entity-card__meta-label">{label}</span>
+      <div className={`entity-card__meta-value${plain ? ' entity-card__meta-value--plain' : ''}`}>{value}</div>
+    </div>
+  );
 }
 
 export function Memory() {
@@ -197,139 +225,192 @@ export function Memory() {
 
       <div className="grid grid--2 section">
         <Card title="Aktuelle Runs" tag="API">
-          <div className="table-wrap">
-            <table className="table">
-            <thead>
-              <tr>
-                <th>Zeit</th>
-                <th>Agent</th>
-                <th>Modell</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
+          {loading ? (
+            <div className="empty-state">
+              <div className="empty-state__icon">…</div>
+              <div className="empty-state__title">Runs werden geladen</div>
+              <div className="empty-state__sub">Chronologische Ausführungen werden aus dem Router gelesen.</div>
+            </div>
+          ) : runs.length === 0 ? (
+            <EmptyCollectionState
+              title="Keine Memory-Runs vorhanden"
+              description="Sobald Agent-Läufe in der Memory-API ankommen, erscheinen sie hier als Karten."
+            />
+          ) : (
+            <div className="entity-card-grid entity-card-grid--compact">
               {runs.map((run) => (
-                <tr key={run.run_id}>
-                  <td>
-                    <strong>{formatDateTime(run.started_at)}</strong>
-                    <div className="text--muted text--sm">{run.run_id}</div>
-                  </td>
-                  <td>{run.agent_name}</td>
-                  <td>{run.used_model ?? '–'}</td>
-                  <td>{run.success ? 'Erfolgreich' : 'Fehlgeschlagen'}</td>
-                </tr>
+                <Card
+                  key={run.run_id}
+                  className="entity-card"
+                  title={run.agent_name}
+                  tag={run.success ? 'SUCCESS' : 'FAILED'}
+                  headerActions={
+                    <span className={`badge ${run.success ? 'badge--ok' : 'badge--fail'}`}>
+                      <span className="badge__dot" />
+                      {run.success ? 'Erfolgreich' : 'Fehlgeschlagen'}
+                    </span>
+                  }
+                >
+                  <div className="entity-card__stack">
+                    <p className="entity-card__lead">{run.input || 'Kein Input gespeichert.'}</p>
+                    <div className="entity-card__meta-grid">
+                      <MetaItem label="Gestartet" value={formatDateTime(run.started_at)} plain />
+                      <MetaItem label="Beendet" value={formatDateTime(run.finished_at)} plain />
+                      <MetaItem label="Modell" value={run.used_model ?? '–'} />
+                      <MetaItem label="Run ID" value={run.run_id} />
+                    </div>
+                    {run.final_answer && (
+                      <div className="entity-card__section">
+                        <span className="entity-card__section-title">Final Answer</span>
+                        <div className="entity-card__note">{run.final_answer}</div>
+                      </div>
+                    )}
+                  </div>
+                </Card>
               ))}
-              {runs.length === 0 && !loading && (
-                <tr>
-                  <td colSpan={4} className="text--muted" style={{ textAlign: 'center' }}>
-                    Keine Memory-Runs vorhanden.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-            </table>
-          </div>
+            </div>
+          )}
         </Card>
 
         <Card title="Incidents" tag="API">
-          <div className="table-wrap">
-            <table className="table">
-            <thead>
-              <tr>
-                <th>Titel</th>
-                <th>Schwere</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
+          {loading ? (
+            <div className="empty-state">
+              <div className="empty-state__icon">…</div>
+              <div className="empty-state__title">Incidents werden geladen</div>
+              <div className="empty-state__sub">Bestehende Vorfälle bleiben chronologisch unverändert.</div>
+            </div>
+          ) : incidents.length === 0 ? (
+            <EmptyCollectionState
+              title="Keine Incidents gespeichert"
+              description="Es gibt aktuell keine Incident-Einträge in der Memory-API."
+            />
+          ) : (
+            <div className="entity-card-grid entity-card-grid--compact">
               {incidents.map((incident) => (
-                <tr key={incident.id}>
-                  <td>
-                    <strong>{incident.title}</strong>
-                    <div className="text--muted text--sm">{incident.summary}</div>
-                  </td>
-                  <td>{incident.severity}</td>
-                  <td>{incident.status}</td>
-                </tr>
+                <Card
+                  key={incident.id}
+                  className="entity-card"
+                  title={incident.title}
+                  tag={incident.severity}
+                  headerActions={
+                    <span className={`badge ${incident.status === 'closed' ? 'badge--ok' : 'badge--warn'}`}>
+                      <span className="badge__dot" />
+                      {incident.status}
+                    </span>
+                  }
+                >
+                  <div className="entity-card__stack">
+                    <p className="entity-card__lead">{incident.summary || incident.description || 'Keine Zusammenfassung vorhanden.'}</p>
+                    <div className="entity-card__meta-grid">
+                      <MetaItem label="Erstellt" value={formatDateTime(incident.created_at)} plain />
+                      <MetaItem label="Aktualisiert" value={formatDateTime(incident.updated_at)} plain />
+                      <MetaItem label="Findings" value={incident.findings.length} plain />
+                      <MetaItem label="Severity" value={incident.severity} plain />
+                    </div>
+                    {incident.findings.length > 0 && (
+                      <div className="entity-card__section">
+                        <span className="entity-card__section-title">Findings</span>
+                        <div className="entity-card__note-list">
+                          {incident.findings.slice(0, 3).map((finding) => (
+                            <div key={finding.id} className="entity-card__note">
+                              {finding.content}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Card>
               ))}
-              {incidents.length === 0 && !loading && (
-                <tr>
-                  <td colSpan={3} className="text--muted" style={{ textAlign: 'center' }}>
-                    Keine Incidents gespeichert.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-            </table>
-          </div>
+            </div>
+          )}
         </Card>
       </div>
 
       <div className="grid grid--2 section">
         <Card title="Knowledge" tag="API">
-          <div className="table-wrap">
-            <table className="table">
-            <thead>
-              <tr>
-                <th>Titel</th>
-                <th>Vertrauen</th>
-                <th>Bestätigt</th>
-              </tr>
-            </thead>
-            <tbody>
+          {loading ? (
+            <div className="empty-state">
+              <div className="empty-state__icon">…</div>
+              <div className="empty-state__title">Knowledge wird geladen</div>
+              <div className="empty-state__sub">Bestätigte und unbestätigte Wissenseinträge erscheinen als Karten.</div>
+            </div>
+          ) : knowledge.length === 0 ? (
+            <EmptyCollectionState
+              title="Keine Knowledge-Einträge gespeichert"
+              description="Es liegen noch keine Wissenseinträge aus dem Router vor."
+            />
+          ) : (
+            <div className="entity-card-grid entity-card-grid--compact">
               {knowledge.map((entry) => (
-                <tr key={entry.id}>
-                  <td>
-                    <strong>{entry.title}</strong>
-                    <div className="text--muted text--sm">{entry.probable_cause}</div>
-                  </td>
-                  <td>{entry.confidence}</td>
-                  <td>{entry.confirmed ? 'Ja' : 'Nein'}</td>
-                </tr>
+                <Card
+                  key={entry.id}
+                  className="entity-card"
+                  title={entry.title}
+                  tag={entry.category}
+                  headerActions={
+                    <span className={`badge ${entry.confirmed ? 'badge--ok' : 'badge--idle'}`}>
+                      <span className="badge__dot" />
+                      {entry.confirmed ? 'Bestätigt' : 'Unbestätigt'}
+                    </span>
+                  }
+                >
+                  <div className="entity-card__stack">
+                    <p className="entity-card__lead">{entry.probable_cause || entry.content}</p>
+                    <div className="entity-card__meta-grid">
+                      <MetaItem label="Confidence" value={entry.confidence ?? '–'} plain />
+                      <MetaItem label="Erstellt" value={formatDateTime(entry.created_at)} plain />
+                    </div>
+                    <div className="entity-card__section">
+                      <span className="entity-card__section-title">Inhalt</span>
+                      <div className="entity-card__note">{entry.content}</div>
+                    </div>
+                  </div>
+                </Card>
               ))}
-              {knowledge.length === 0 && !loading && (
-                <tr>
-                  <td colSpan={3} className="text--muted" style={{ textAlign: 'center' }}>
-                    Keine Knowledge-Einträge gespeichert.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-            </table>
-          </div>
+            </div>
+          )}
         </Card>
 
         <Card title="Feedback" tag="API">
-          <div className="table-wrap">
-            <table className="table">
-            <thead>
-              <tr>
-                <th>Verlauf</th>
-                <th>Entscheidung</th>
-                <th>Autor</th>
-              </tr>
-            </thead>
-            <tbody>
+          {loading ? (
+            <div className="empty-state">
+              <div className="empty-state__icon">…</div>
+              <div className="empty-state__title">Feedback wird geladen</div>
+              <div className="empty-state__sub">Verknüpfte Run-Rückmeldungen bleiben in API-Reihenfolge erhalten.</div>
+            </div>
+          ) : feedback.length === 0 ? (
+            <EmptyCollectionState
+              title="Kein Feedback gespeichert"
+              description="Der Router hat aktuell keine Feedback-Einträge zurückgeliefert."
+            />
+          ) : (
+            <div className="entity-card-grid entity-card-grid--compact">
               {feedback.map((entry) => (
-                <tr key={entry.id}>
-                  <td>
-                    <strong>{entry.comment}</strong>
-                    <div className="text--muted text--sm">{entry.related_run_id ?? '–'}</div>
-                  </td>
-                  <td>{entry.verdict}</td>
-                  <td>{entry.created_by}</td>
-                </tr>
+                <Card
+                  key={entry.id}
+                  className="entity-card"
+                  title={entry.verdict ?? 'Feedback'}
+                  tag={`Rating ${entry.rating}`}
+                  headerActions={
+                    <span className={`badge ${entry.rating >= 4 ? 'badge--ok' : entry.rating >= 2 ? 'badge--warn' : 'badge--fail'}`}>
+                      <span className="badge__dot" />
+                      {entry.created_by || 'Unbekannt'}
+                    </span>
+                  }
+                >
+                  <div className="entity-card__stack">
+                    <p className="entity-card__lead">{entry.comment || 'Kein Kommentar hinterlegt.'}</p>
+                    <div className="entity-card__meta-grid">
+                      <MetaItem label="Run ID" value={entry.run_id} />
+                      <MetaItem label="Related Run" value={entry.related_run_id ?? '–'} />
+                      <MetaItem label="Erstellt" value={formatDateTime(entry.created_at)} plain />
+                    </div>
+                  </div>
+                </Card>
               ))}
-              {feedback.length === 0 && !loading && (
-                <tr>
-                  <td colSpan={3} className="text--muted" style={{ textAlign: 'center' }}>
-                    Kein Feedback gespeichert.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-            </table>
-          </div>
+            </div>
+          )}
         </Card>
       </div>
 
@@ -360,22 +441,32 @@ export function Memory() {
 
           <div style={{ marginTop: '1rem' }}>
             {notes.length === 0 ? (
-              <p className="text--muted">Noch keine lokalen Notizen gespeichert.</p>
+              <EmptyCollectionState
+                title="Noch keine lokalen Notizen gespeichert"
+                description="Neue Browser-Notizen erscheinen direkt darunter als lokale Karten."
+              />
             ) : (
-              <div className="gap-list">
+              <div className="entity-card-grid entity-card-grid--compact">
                 {notes.map((note) => (
-                  <div key={note.id} className="result-box">
-                    <div className="kv">
-                      <span className="kv__label">{note.title}</span>
-                      <span className="kv__value text--muted">
-                        {new Date(note.created_at).toLocaleString('de-DE')}
-                      </span>
+                  <Card
+                    key={note.id}
+                    className="entity-card"
+                    title={note.title}
+                    tag="LOCAL"
+                    headerActions={<span className="text--muted text--sm">{formatDateTime(note.created_at)}</span>}
+                  >
+                    <div className="entity-card__stack">
+                      <p className="entity-card__lead">{note.content}</p>
+                      <div className="entity-card__footer">
+                        <div className="text--muted text--sm">Nur im aktuellen Browser gespeichert</div>
+                        <div className="entity-card__actions">
+                          <button className="btn btn--sm btn--ghost" onClick={() => removeNote(note.id)}>
+                            Löschen
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    <p style={{ margin: '0.75rem 0' }}>{note.content}</p>
-                    <button className="btn btn--sm btn--ghost" onClick={() => removeNote(note.id)}>
-                      Löschen
-                    </button>
-                  </div>
+                  </Card>
                 ))}
               </div>
             )}
@@ -383,29 +474,78 @@ export function Memory() {
         </Card>
 
         <Card title="Registry-Details" tag="API">
-          <div className="table-wrap">
-            <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Read only</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
+          {loading ? (
+            <div className="empty-state">
+              <div className="empty-state__icon">…</div>
+              <div className="empty-state__title">Registry wird geladen</div>
+              <div className="empty-state__sub">Agenten, Skills und Actions werden für die Freigabesicht gesammelt.</div>
+            </div>
+          ) : agents.length === 0 && skills.length === 0 && actions.length === 0 ? (
+            <EmptyCollectionState
+              title="Keine Registry-Daten verfügbar"
+              description="Weder Agenten noch Skills oder Actions konnten geladen werden."
+            />
+          ) : (
+            <div className="entity-card-grid entity-card-grid--compact">
               {agents.map((agent) => (
-                <tr key={agent.name}>
-                  <td>
-                    <strong>{agent.name}</strong>
-                    <div className="text--muted text--sm">{agent.description}</div>
-                  </td>
-                  <td>{agent.read_only ? 'Ja' : 'Nein'}</td>
-                  <td>{agent.enabled === false ? 'Inaktiv' : 'Aktiv'}</td>
-                </tr>
+                <Card
+                  key={`agent-${agent.name}`}
+                  className="entity-card"
+                  title={agent.name}
+                  tag="AGENT"
+                  headerActions={
+                    <span className={`badge ${agent.enabled === false ? 'badge--fail' : 'badge--ok'}`}>
+                      <span className="badge__dot" />
+                      {agent.enabled === false ? 'Inaktiv' : 'Aktiv'}
+                    </span>
+                  }
+                >
+                  <div className="entity-card__stack">
+                    <p className="entity-card__lead">{agent.description || 'Keine Beschreibung vorhanden.'}</p>
+                    <div className="entity-card__meta-grid">
+                      <MetaItem label="Read only" value={agent.read_only ? 'Ja' : 'Nein'} plain />
+                      <MetaItem label="Tools" value={agent.allowed_tools.length} plain />
+                    </div>
+                  </div>
+                </Card>
               ))}
-            </tbody>
-            </table>
-          </div>
+
+              {skills.map((skill) => (
+                <Card
+                  key={`skill-${skill.name}`}
+                  className="entity-card"
+                  title={skill.name}
+                  tag="SKILL"
+                  headerActions={
+                    <span className={`badge ${skill.enabled === false ? 'badge--fail' : 'badge--ok'}`}>
+                      <span className="badge__dot" />
+                      {skill.enabled === false ? 'Inaktiv' : 'Aktiv'}
+                    </span>
+                  }
+                >
+                  <div className="entity-card__stack">
+                    <p className="entity-card__lead">{skill.description || 'Keine Beschreibung vorhanden.'}</p>
+                    <div className="entity-card__meta-grid">
+                      <MetaItem label="Read only" value={skill.read_only ? 'Ja' : 'Nein'} plain />
+                      <MetaItem label="Tools" value={skill.allowed_tools.length} plain />
+                    </div>
+                  </div>
+                </Card>
+              ))}
+
+              {actions.map((action) => (
+                <Card key={`action-${action.name}`} className="entity-card" title={action.name} tag="ACTION">
+                  <div className="entity-card__stack">
+                    <p className="entity-card__lead">{action.description || 'Keine Beschreibung vorhanden.'}</p>
+                    <div className="entity-card__meta-grid">
+                      <MetaItem label="Targets" value={action.allowed_targets.length} plain />
+                      <MetaItem label="Approval" value={action.requires_approval ? 'Ja' : 'Nein'} plain />
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
         </Card>
       </div>
     </Layout>

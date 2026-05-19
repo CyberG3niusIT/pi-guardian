@@ -1,62 +1,16 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
-from app.config import settings
 from app.router.decision.models import RequestClassification, RequestDecision
-from app.router.fairness import FairnessReviewResult, assess_fairness
 from app.router.service import route_prompt
 from app.schemas.request_models import RouteRequest
 
 
-def test_assess_fairness_parses_risk_and_override(monkeypatch):
-    async def fake_generate_with_ollama(model, prompt, request_id, stream=False):
-        return {
-            "response": json.dumps(
-                {
-                    "fairness_risk": "high",
-                    "override_to_large": True,
-                    "reasons": ["sensible Anfrage"],
-                    "notes": ["Large-Modell erzwingen"],
-                }
-            )
-        }
-
-    monkeypatch.setattr("app.router.fairness.generate_with_ollama", fake_generate_with_ollama)
-
-    result = asyncio.run(
-        assess_fairness(
-            prompt="Bitte prüfe Fairness",
-            selected_model="qwen2.5-coder:1.5b",
-            request_id="req-1",
-        )
-    )
-
-    assert result.attempted is True
-    assert result.used is True
-    assert result.risk == "high"
-    assert result.override_to_large is True
-    assert result.threshold in {"low", "medium", "high"}
-    assert result.reasons == ["sensible Anfrage"]
-    assert result.notes == ["Large-Modell erzwingen"]
-
-
-def test_route_prompt_uses_fairness_override(monkeypatch):
+def test_route_prompt_uses_selected_model_without_router_fairness(monkeypatch):
     request = RouteRequest(prompt="Bitte antworte kurz")
     session = SimpleNamespace()
     history_calls: list[dict] = []
-
-    async def fake_assess_fairness(prompt, selected_model, request_id):
-        return FairnessReviewResult(
-            attempted=True,
-            used=True,
-            risk="high",
-            override_to_large=True,
-            threshold="medium",
-            reasons=["fairness risk"],
-            notes=["route escalated"],
-        )
 
     async def fake_generate_with_ollama(model, prompt, request_id, stream=False):
         return {
@@ -76,26 +30,28 @@ def test_route_prompt_uses_fairness_override(monkeypatch):
     def fake_create_route_history_entry(session, **kwargs):
         history_calls.append(kwargs)
 
-    monkeypatch.setattr("app.router.service.assess_fairness", fake_assess_fairness)
     monkeypatch.setattr("app.router.service.generate_with_ollama", fake_generate_with_ollama)
     monkeypatch.setattr("app.router.service.decide_route_request", fake_decide_route_request)
     monkeypatch.setattr("app.router.service.create_route_history_entry", fake_create_route_history_entry)
 
     result = asyncio.run(route_prompt(request, session=session, client_name="client-a"))
 
-    assert result.model == settings.LARGE_MODEL
+    assert result.model == "qwen2.5-coder:1.5b"
     assert result.response == "ok"
     assert result.decision_classification == "llm_only"
     assert result.decision_reasons
-    assert result.fairness_review_attempted is True
-    assert result.fairness_review_used is True
-    assert result.fairness_risk == "high"
-    assert result.fairness_review_override is True
-    assert result.fairness_reasons == ["fairness risk"]
-    assert result.fairness_notes == ["route escalated"]
+    assert result.fairness_review_attempted is False
+    assert result.fairness_review_used is False
+    assert result.fairness_risk == "unknown"
+    assert result.fairness_review_override is False
+    assert result.fairness_reasons == []
+    assert result.fairness_notes == []
     assert len(history_calls) == 1
-    assert history_calls[0]["model"] == settings.LARGE_MODEL
+    assert history_calls[0]["model"] == "qwen2.5-coder:1.5b"
     assert history_calls[0]["decision_classification"] == "llm_only"
+    assert "fairness_review_attempted" not in history_calls[0]
+    assert "fairness_review_used" not in history_calls[0]
+    assert "fairness_risk" not in history_calls[0]
 
 
 def test_route_prompt_blocks_high_risk_requests(monkeypatch):
@@ -123,3 +79,44 @@ def test_route_prompt_blocks_high_risk_requests(monkeypatch):
     assert len(history_calls) == 1
     assert history_calls[0]["decision_classification"] == "blocked"
     assert history_calls[0]["model"] is None
+
+
+def test_route_prompt_uses_kids_controller_repetition_skill(monkeypatch):
+    request = RouteRequest(
+        prompt=(
+            "Bewerte die folgende Kids_Controller-Beobachtung streng supervisorisch. "
+            "Antworte ausschließlich als JSON."
+            '{"kind":"kids_controller_observation","observation":{"pos1":1,"pos2":2,"pos3":3,'
+            '"trend":{"arrangement_signature":"123","comparable_draw_count":5,'
+            '"same_arrangement_count":4,"same_arrangement_ratio":0.8,"repeated_arrangement":true},'
+            '"observed_at":"2026-05-18T20:55:12Z"}}'
+        )
+    )
+    session = SimpleNamespace()
+    history_calls: list[dict] = []
+
+    async def fail_generate_with_ollama(*args, **kwargs):
+        raise AssertionError("LLM-Ausführung darf für Kids-Controller-Trendbewertung nicht starten")
+
+    def fake_decide_route_request(_request):
+        return RequestDecision(
+            classification=RequestClassification.LLM_ONLY,
+            selected_model="qwen2.5-coder:1.5b",
+            reasons=["kids-controller-observation"],
+        )
+
+    def fake_create_route_history_entry(_session, **kwargs):
+        history_calls.append(kwargs)
+
+    monkeypatch.setattr("app.router.service.generate_with_ollama", fail_generate_with_ollama)
+    monkeypatch.setattr("app.router.service.decide_route_request", fake_decide_route_request)
+    monkeypatch.setattr("app.router.service.create_route_history_entry", fake_create_route_history_entry)
+
+    result = asyncio.run(route_prompt(request, session=session, client_name="client-a"))
+    payload = json.loads(result.response)
+
+    assert result.model == "kids_controller_repetition_review"
+    assert payload["status"] == "recommend_review"
+    assert "sehr oft" in payload["message"]
+    assert len(history_calls) == 1
+    assert history_calls[0]["model"] == "kids_controller_repetition_review"

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlmodel import Session
 
 from app.agents.activity import attach_agent_activity
+from app.api.import_helpers import fetch_json_from_github, fetch_text_from_github, normalize_github_url
 from app.agents.registry import (
     create_agent,
     delete_agent,
@@ -21,6 +22,8 @@ from app.database import get_session
 from app.models.agent_models import (
     AgentCreateRequest,
     AgentDefinition,
+    AgentImportRequest,
+    AgentImportResponse,
     AgentRunRequest,
     AgentRunResponse,
     AgentSettings,
@@ -96,6 +99,64 @@ async def agent_create(payload: AgentCreateRequest) -> AgentDefinition:
         return create_agent(payload)
     except ValueError as exc:
         raise _map_value_error(exc) from exc
+
+
+def _extract_agent_requests(payload: dict) -> list[AgentCreateRequest]:
+    raw_agents = payload.get("agents")
+    if isinstance(raw_agents, list):
+        return [AgentCreateRequest.model_validate(item) for item in raw_agents]
+    if {"name", "description", "settings"}.issubset(payload.keys()):
+        return [AgentCreateRequest.model_validate(payload)]
+    raise ValueError("JSON muss entweder 'agents' oder eine einzelne Agent-Definition enthalten")
+
+
+@router.post(
+    "/import/",
+    response_model=AgentImportResponse,
+    dependencies=[Depends(require_agents_access)],
+)
+async def agent_import(payload: AgentImportRequest) -> AgentImportResponse:
+    if payload.github_url:
+        try:
+            raw_payload = fetch_json_from_github(payload.github_url)
+            # Manifest-Logik: Falls es ein Manifest oder ein Scan-Resultat ist, Einträge nachladen
+            if "entries" in raw_payload:
+                requests = []
+                branch = raw_payload.get("branch", "main")
+                base_url = "/".join(payload.github_url.rstrip("/").rstrip(".git").split("/")[:5])
+                for entry in raw_payload["entries"]:
+                    if entry.get("type") == "agent":
+                        file_url = f"{base_url}/blob/{branch}/{entry['path']}"
+                        if entry['path'].endswith(".md"):
+                            content = fetch_text_from_github(file_url)
+                            requests.append(AgentCreateRequest(
+                                name=entry['name'],
+                                description=f"Importiert aus {entry['path']}",
+                                system_prompt=content,
+                                settings=AgentSettings()
+                            ))
+                        else:
+                            agent_data = fetch_json_from_github(file_url)
+                            requests.append(AgentCreateRequest.model_validate(agent_data))
+                source = normalize_github_url(payload.github_url)
+            else:
+                requests = _extract_agent_requests(raw_payload)
+                source = normalize_github_url(payload.github_url)
+        except ValueError as exc:
+            raise _map_value_error(exc) from exc
+    else:
+        if not payload.agents:
+            raise HTTPException(status_code=422, detail="Entweder github_url oder agents angeben")
+        requests = payload.agents
+        source = "manual"
+
+    imported: list[AgentDefinition] = []
+    try:
+        for request in requests:
+            imported.append(create_agent(request))
+    except ValueError as exc:
+        raise _map_value_error(exc) from exc
+    return AgentImportResponse(imported_agents=imported, source=source)
 
 
 @router.put(

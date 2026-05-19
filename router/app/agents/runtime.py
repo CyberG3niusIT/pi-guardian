@@ -23,6 +23,7 @@ from app.models.skill_models import SkillExecutionContext, SkillResult
 from app.models.tool_models import ToolExecutionContext
 from app.router.classifier import select_model_for_prompt
 from app.router.errors import RouterApiError
+from app.router.inference.wrapper import TIMEOUT_AGENT
 from app.router.ollama_client import generate_with_ollama
 from app.skills.executor import executor as skill_executor
 from app.tools.executor import ToolExecutor
@@ -54,6 +55,17 @@ class AgentRuntime:
         if result.success:
             return json.dumps(result.output, ensure_ascii=False, default=str)
         return result.error or "Skill fehlgeschlagen."
+
+    @staticmethod
+    def _requires_skill_before_final_answer(
+        agent_name: str,
+        state: AgentRunState,
+    ) -> tuple[bool, str | None]:
+        if agent_name != "kids_controller_supervisor":
+            return False, None
+        if state.skill_call_count > 0:
+            return False, None
+        return True, "Agent muss zuerst den Skill kids_controller_repetition_review aufrufen."
 
     async def run(self, request: AgentRunRequest) -> AgentRunResponse:
         run_id = str(uuid.uuid4())
@@ -115,6 +127,8 @@ class AgentRuntime:
                     prompt=prompt,
                     request_id=run_id,
                     stream=False,
+                    timeout=TIMEOUT_AGENT,
+                    session_id=run_id,
                 )
             except RouterApiError as exc:
                 error = f"Ollama-Fehler: {exc.code} - {exc.message}"
@@ -414,6 +428,30 @@ class AgentRuntime:
                 state.completed = True
                 break
 
+            requires_skill_first, enforcement_error = self._requires_skill_before_final_answer(
+                agent.name,
+                state,
+            )
+            if requires_skill_first and enforcement_error is not None:
+                errors.append(enforcement_error)
+                logger.warning(
+                    "agent_run_final_answer_rejected agent=%s run_id=%s step=%s error=%s",
+                    agent.name,
+                    run_id,
+                    step_number,
+                    enforcement_error,
+                )
+                steps.append(
+                    AgentStep(
+                        step_number=step_number,
+                        action="parse_error",
+                        tool_call_or_response=response_text,
+                        observation=enforcement_error,
+                    )
+                )
+                state.context_history.append(steps[-1])
+                continue
+
             final_answer = response_text
             state.completed = True
             steps.append(
@@ -463,6 +501,11 @@ class AgentRuntime:
             used_model=model,
         )
         record_agent_run(request, response)
+        try:
+            from app.memory.agent_memory import extract_from_run
+            extract_from_run(response.run_id)
+        except Exception:
+            pass
         return response
 
 

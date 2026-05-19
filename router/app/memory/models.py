@@ -34,10 +34,14 @@ class AgentSettingsRecord(SQLModel, table=True):
 class SkillRecord(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
+    skill_type: str = Field(default="system", index=True)
     description: str
     allowed_tools: str = Field(default="[]")
     input_schema: str = Field(default="{}")
     output_schema: str = Field(default="{}")
+    prompt_template: str | None = None
+    preferred_model: str | None = None
+    source_url: str | None = None
     read_only: bool = Field(default=True)
     version: str = Field(default="1.0")
     enabled: bool = Field(default=True)
@@ -193,3 +197,16 @@ class FeedbackEntryRecord(SQLModel, table=True):
     comment: str = Field(default="")
     created_by: str = Field(default="")
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+class AgentMemoryEntry(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    agent_name: str = Field(index=True)
+    memory_type: str = Field(index=True)  # "finding", "failure", "feedback", "instruction"
+    content: str  # Short text injected into prompt, keep under 300 chars
+    active: bool = Field(default=True, index=True)
+    priority: int = Field(default=3)  # 1-5, higher shown first (5=critical)
+    source_run_id: str | None = Field(default=None, index=True)
+    times_confirmed: int = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)

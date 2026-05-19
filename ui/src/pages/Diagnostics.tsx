@@ -3,7 +3,7 @@ import { Card } from '../components/Card';
 import { Layout } from '../components/Layout';
 import { fetchHealth, fetchSettings, sendRoute, ApiRequestError } from '../api/client';
 import { routerAddress, CONFIG } from '../config';
-import type { HealthResponse, RouteRequest, RouteResponse, ConnectionState, RouterSettings } from '../types';
+import type { HealthResponse, RouteResponse, ConnectionState, RouterSettings } from '../types';
 
 interface Props {
   connectionState: ConnectionState;
@@ -73,21 +73,18 @@ export function Diagnostics({ connectionState, onRefresh }: Props) {
     setRouteError(null);
     setRouteResult(null);
 
-    const requestBody: RouteRequest = {
-      prompt: prompt.trim(),
-      preferred_model:
-        modelRole === 'deep_model'
-          ? (routerSettings?.large_model ?? CONFIG.largeModel)
-          : modelRole === 'fast_model'
-            ? (routerSettings?.default_model ?? CONFIG.defaultModel)
-            : null,
-      stream: false,
-    };
+    const preferredModel =
+      modelRole === 'deep_model'
+        ? (routerSettings?.large_model ?? undefined)
+        : modelRole === 'fast_model'
+          ? (routerSettings?.default_model ?? CONFIG.defaultModel)
+          : undefined;
+    const requestBody = { prompt: prompt.trim(), preferred_model: preferredModel ?? null, stream: false };
     setLastRequest(JSON.stringify(requestBody, null, 2));
 
     const start = performance.now();
     try {
-      const res = await sendRoute(requestBody);
+      const res = await sendRoute(prompt.trim(), preferredModel);
       setRouteTime(Math.round(performance.now() - start));
       setRouteResult(res);
     } catch (err) {
