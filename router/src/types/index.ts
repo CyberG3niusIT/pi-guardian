@@ -476,7 +476,7 @@ export interface MemoryFeedbackCreate {
   created_by?: string;
 }
 
-export type Page = 'dashboard' | 'models' | 'agents' | 'clients' | 'settings' | 'diagnostics' | 'logs' | 'history' | 'memory';
+export type Page = 'dashboard' | 'models' | 'agents' | 'skills' | 'clients' | 'settings' | 'diagnostics' | 'logs' | 'history' | 'memory';
 
 export interface ApiError {
   message: string;

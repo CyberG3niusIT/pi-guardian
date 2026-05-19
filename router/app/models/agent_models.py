@@ -342,6 +342,28 @@ class AgentCreateRequest(BaseModel):
         return normalized
 
 
+class AgentImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    github_url: str | None = None
+    agents: list["AgentCreateRequest"] = Field(default_factory=list)
+
+    @field_validator("github_url")
+    @classmethod
+    def _strip_github_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class AgentImportResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    imported_agents: list[AgentDefinition] = Field(default_factory=list)
+    source: str
+
+
 class AgentUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

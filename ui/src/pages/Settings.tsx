@@ -2,14 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card } from '../components/Card';
 import { Layout } from '../components/Layout';
 import { CONFIG } from '../config';
-import {
-  clearStoredRouterApiKey,
-  fetchSettings,
-  getStoredRouterApiKey,
-  updateSettings,
-  setStoredRouterApiKey,
-  ApiRequestError,
-} from '../api/client';
+import { fetchSettings, updateSettings, ApiRequestError } from '../api/client';
 import type { RouterSettings } from '../types';
 
 /**
@@ -30,7 +23,7 @@ const DEFAULT_SETTINGS: RouterSettings = {
   ollama_port: 11434,
   timeout: 30,
   default_model: CONFIG.defaultModel,
-  large_model: CONFIG.largeModel,
+  large_model: 'qwen2.5-coder:3b',
   logging_level: 'INFO',
   stream_default: false,
   require_api_key: true,
@@ -43,8 +36,6 @@ export function Settings() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [adminKeyInput, setAdminKeyInput] = useState(getStoredRouterApiKey());
-  const [adminKeySaved, setAdminKeySaved] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -96,25 +87,9 @@ export function Settings() {
     setSaved(false);
   }
 
-  function handleSaveAdminKey() {
-    setStoredRouterApiKey(adminKeyInput);
-    setAdminKeySaved(true);
-    setTimeout(() => setAdminKeySaved(false), 3000);
-  }
-
-  function handleClearAdminKey() {
-    clearStoredRouterApiKey();
-    setAdminKeyInput('');
-    setAdminKeySaved(true);
-    setTimeout(() => setAdminKeySaved(false), 3000);
-  }
-
   return (
     <Layout title="Router-Einstellungen">
-      <div className="alert alert--warn" style={{ marginBottom: '1.5rem' }}>
-        <strong>Backend verbunden:</strong> Einstellungen werden jetzt aus dem Router geladen
-        und per PUT /settings zurückgeschrieben.
-      </div>
+      {loading && <p className="text--muted">Lade Einstellungen…</p>}
 
       <div className="grid grid--2">
         <Card title="Router" tag="LIVE">
@@ -268,34 +243,18 @@ export function Settings() {
       )}
 
       <div style={{ marginTop: '1.5rem' }}>
-        <Card title="Admin-Zugriff" tag="AUTH">
+        <Card title="Auth-Session" tag="AUTH">
           <p className="text--sm">
-            Geschützte Router-Requests verwenden den im Browser gespeicherten API-Key.
-            Er wird für `/agents`, `/skills`, `/actions` und weitere Admin-Routen als `X-API-Key` gesendet.
+            Die Session wird beim Start der App automatisch per <code>POST /auth/bootstrap</code> gesetzt.
+            Der Auth-Cookie ist httpOnly und läuft nach einem Jahr ab – kein manueller API-Key nötig.
           </p>
-          <div className="form-group" style={{ marginTop: '1rem' }}>
-            <label className="form-label">Router API-Key</label>
-            <input
-              className="form-input"
-              type="password"
-              value={adminKeyInput}
-              onChange={(e) => setAdminKeyInput(e.target.value)}
-              placeholder="API-Key eintragen"
-            />
-          </div>
-          <div className="btn-group">
-            <button className="btn" onClick={handleSaveAdminKey}>
-              Key speichern
-            </button>
-            <button className="btn btn--ghost" onClick={handleClearAdminKey}>
-              Key löschen
-            </button>
-          </div>
-          {adminKeySaved && (
-            <span className="text--ok text--sm" style={{ display: 'inline-block', marginTop: '0.75rem' }}>
-              Browser-Key aktualisiert.
-            </span>
-          )}
+          <button
+            className="btn btn--sm btn--ghost"
+            style={{ marginTop: '0.75rem' }}
+            onClick={() => window.location.reload()}
+          >
+            Session erneuern (Seite neu laden)
+          </button>
         </Card>
       </div>
     </Layout>

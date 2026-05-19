@@ -109,6 +109,36 @@ def test_agent_health_check_skill_reports_platform_state():
     assert "/actions" in result.output["details"]["routes"]
 
 
+def test_kids_controller_repetition_skill_flags_frequent_arrangement():
+    skill = get_skill("kids_controller_repetition_review")
+    assert skill is not None
+
+    result = skill.execute(
+        skill.validate_arguments(
+            {
+                "observation": {
+                    "pos1": 1,
+                    "pos2": 2,
+                    "pos3": 3,
+                    "trend": {
+                        "arrangement_signature": "123",
+                        "comparable_draw_count": 5,
+                        "same_arrangement_count": 4,
+                        "same_arrangement_ratio": 0.8,
+                        "repeated_arrangement": True,
+                    },
+                    "observed_at": "2026-05-18T20:55:12Z",
+                }
+            }
+        )
+    )
+
+    assert result.success is True
+    assert result.output["status"] == "recommend_review"
+    assert "sehr oft" in result.output["message"]
+    assert result.output["source"] == "kids_controller_repetition_review"
+
+
 def test_skill_executor_blocks_unauthorized_skill():
     context = SkillExecutionContext(
         agent_name="guardian_supervisor",
@@ -199,7 +229,7 @@ def test_service_operator_runtime_proposes_action(monkeypatch):
         ]
     )
 
-    async def fake_generate_with_ollama(model, prompt, request_id, stream=False):
+    async def fake_generate_with_ollama(model, prompt, request_id, stream=False, **kwargs):
         return next(responses)
 
     async def fake_execute(self, tool_name, arguments, *, allowed_tools, context):
@@ -216,6 +246,9 @@ def test_service_operator_runtime_proposes_action(monkeypatch):
 
     monkeypatch.setattr("app.agents.runtime.generate_with_ollama", fake_generate_with_ollama)
     monkeypatch.setattr("app.skills.standard.ToolExecutor.execute", fake_execute)
+    monkeypatch.setattr("app.agents.runtime.record_action_proposal", lambda **kwargs: None)
+    monkeypatch.setattr("app.agents.runtime.record_agent_run", lambda request, response: None)
+    monkeypatch.setattr("app.memory.agent_memory.extract_from_run", lambda run_id: None)
 
     result = asyncio.run(
         run_agent(

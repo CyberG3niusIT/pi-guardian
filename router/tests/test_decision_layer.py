@@ -22,6 +22,28 @@ def test_classify_request_tool_required():
     assert "service_status" in decision.tool_hints
 
 
+def test_classify_kids_controller_json_schema_prompt_as_llm_only():
+    decision = classify_request(
+        RouteRequest(
+            prompt=(
+                "Bewerte die folgende Kids_Controller-Beobachtung streng "
+                "supervisorisch. Antworte ausschließlich als JSON mit den Feldern "
+                "status, message, findings, recommendations, confidence, source "
+                "und observed_at. Nutze ausschließlich die Beobachtungsdaten; "
+                "keine freien Ergänzungen."
+                '{"kind":"kids_controller_observation","observation":'
+                '{"latest_effective_draw_id":262,'
+                '"latest_effective_draw_fingerprint":"abc",'
+                '"active_window_status":"ACTIVE"}}'
+            )
+        )
+    )
+
+    assert decision.classification is RequestClassification.LLM_ONLY
+    assert decision.blocked is False
+    assert decision.tool_hints == []
+
+
 def test_classify_request_internet_required():
     decision = classify_request(
         RouteRequest(prompt="Recherchiere online die aktuelle Dokumentation und prüfe die Website")

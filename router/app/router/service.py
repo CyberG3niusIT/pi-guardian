@@ -1,3 +1,4 @@
+import json
 import time
 import uuid
 
@@ -14,7 +15,6 @@ from app.router.auth import AuthorizedClientContext
 from app.router.decision.models import RequestClassification
 from app.router.decision.service import decide_route_request
 from app.router.errors import RouterApiError
-from app.router.fairness import assess_fairness
 from app.router.history import create_route_history_entry
 from app.router.policy import apply_client_policy
 from app.router.ollama_client import generate_with_ollama
@@ -33,6 +33,37 @@ def _default_policy_trace(classification: str) -> dict:
         can_use_internet=False,
         decision_classification=classification,
     ).model_dump(mode="json")
+
+
+def _extract_kids_controller_observation(prompt: str) -> dict | None:
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(prompt):
+        if char != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(prompt[index:])
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(payload, dict)
+            and payload.get("kind") == "kids_controller_observation"
+            and isinstance(payload.get("observation"), dict)
+        ):
+            return payload["observation"]
+    return None
+
+
+def _run_kids_controller_repetition_review(observation: dict) -> dict | None:
+    from app.skills.registry import get_skill
+
+    skill = get_skill("kids_controller_repetition_review")
+    if skill is None:
+        return None
+    validated = skill.validate_arguments({"observation": observation})
+    result = skill.execute(validated)
+    if not result.success or not isinstance(result.output, dict):
+        return None
+    return result.output
 
 
 async def route_prompt(
@@ -61,6 +92,7 @@ async def route_prompt(
         client_context.policy if client_context is not None else None,
     )
     selected_model = decision.selected_model or settings.DEFAULT_MODEL
+    observation = _extract_kids_controller_observation(request.prompt)
 
     if decision.classification is RequestClassification.BLOCKED:
         duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -228,14 +260,41 @@ async def route_prompt(
             execution_error=execution_error,
         )
 
-    fairness = await assess_fairness(
-        prompt=request.prompt,
-        selected_model=selected_model,
-        request_id=request_id,
-    )
-
-    if fairness.override_to_large and selected_model != settings.LARGE_MODEL:
-        selected_model = settings.LARGE_MODEL
+    if observation is not None:
+        reviewed = _run_kids_controller_repetition_review(observation)
+        if reviewed is not None:
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
+            create_route_history_entry(
+                session,
+                request_id=request_id,
+                prompt_preview=preview,
+                model="kids_controller_repetition_review",
+                success=True,
+                error_code=None,
+                client_name=resolved_client_name,
+                duration_ms=duration_ms,
+                decision_classification=decision.classification.value,
+                decision_reasons=decision.reasons,
+                decision_tool_hints=decision.tool_hints,
+                decision_internet_hints=decision.internet_hints,
+                policy_trace=policy_trace,
+                execution_mode="llm",
+                execution_status="succeeded",
+            )
+            return RouteResponse(
+                request_id=request_id,
+                model="kids_controller_repetition_review",
+                response=json.dumps(reviewed, ensure_ascii=False),
+                done=True,
+                done_reason="skill_completed",
+                duration_ms=duration_ms,
+                decision_classification=decision.classification.value,
+                decision_reasons=decision.reasons,
+                decision_tool_hints=decision.tool_hints,
+                decision_internet_hints=decision.internet_hints,
+                execution_mode="llm",
+                policy_trace=policy_trace,
+            )
 
     try:
         result = await generate_with_ollama(
@@ -262,13 +321,6 @@ async def route_prompt(
             policy_trace=policy_trace,
             execution_mode="llm",
             execution_status="not_executed",
-            fairness_review_attempted=fairness.attempted,
-            fairness_review_used=fairness.used,
-            fairness_risk=fairness.risk,
-            fairness_review_override=fairness.override_to_large,
-            escalation_threshold=fairness.threshold,
-            fairness_reasons=fairness.reasons,
-            fairness_notes=fairness.notes,
         )
         return RouteResponse(
             request_id=request_id,
@@ -281,12 +333,6 @@ async def route_prompt(
             decision_reasons=decision.reasons,
             decision_tool_hints=decision.tool_hints,
             decision_internet_hints=decision.internet_hints,
-            fairness_review_attempted=fairness.attempted,
-            fairness_review_used=fairness.used,
-            fairness_risk=fairness.risk,
-            fairness_review_override=fairness.override_to_large,
-            fairness_reasons=fairness.reasons,
-            fairness_notes=fairness.notes,
             execution_mode="llm",
             policy_trace=policy_trace,
         )
@@ -308,12 +354,5 @@ async def route_prompt(
             execution_mode="llm",
             execution_status="failed",
             execution_error=exc.code,
-            fairness_review_attempted=fairness.attempted,
-            fairness_review_used=fairness.used,
-            fairness_risk=fairness.risk,
-            fairness_review_override=fairness.override_to_large,
-            escalation_threshold=fairness.threshold,
-            fairness_reasons=fairness.reasons,
-            fairness_notes=fairness.notes,
         )
         raise

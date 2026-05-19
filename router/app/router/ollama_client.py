@@ -8,8 +8,9 @@ async def generate_with_ollama(
     request_id: str,
     stream: bool = False,
     timeout: float = TIMEOUT_ROUTE,
+    session_id: str | None = None,
 ) -> dict:
-    return await wrapper.generate(model, prompt, request_id, stream=stream, timeout=timeout)
+    return await wrapper.generate(model, prompt, request_id, stream=stream, timeout=timeout, session_id=session_id)
 
 
 async def post_to_ollama(

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Card } from '../components/Card';
 import { Layout } from '../components/Layout';
 import {
@@ -8,7 +9,7 @@ import {
   fetchClients,
   updateClient,
 } from '../api/client';
-import type { ClientEntry } from '../types';
+import type { ClientCreate, ClientRead } from '../types';
 
 type ClientFormState = {
   name: string;
@@ -43,7 +44,7 @@ function parseRoutes(text: string): string[] {
     .filter(Boolean);
 }
 
-function clientToForm(client: ClientEntry): ClientFormState {
+function clientToForm(client: ClientRead): ClientFormState {
   return {
     name: client.name,
     description: client.description ?? '',
@@ -56,7 +57,7 @@ function clientToForm(client: ClientEntry): ClientFormState {
   };
 }
 
-function makePayload(form: ClientFormState): Omit<ClientEntry, 'id'> {
+function makePayload(form: ClientFormState): ClientCreate {
   return {
     name: form.name.trim(),
     description: form.description.trim(),
@@ -70,13 +71,40 @@ function makePayload(form: ClientFormState): Omit<ClientEntry, 'id'> {
   };
 }
 
+function EmptyCollectionState({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="empty-state">
+      <div className="empty-state__icon">□</div>
+      <div className="empty-state__title">{title}</div>
+      <div className="empty-state__sub">{description}</div>
+    </div>
+  );
+}
+
+function MetaItem({
+  label,
+  value,
+  plain = false,
+}: {
+  label: string;
+  value: ReactNode;
+  plain?: boolean;
+}) {
+  return (
+    <div className="entity-card__meta-item">
+      <span className="entity-card__meta-label">{label}</span>
+      <div className={`entity-card__meta-value${plain ? ' entity-card__meta-value--plain' : ''}`}>{value}</div>
+    </div>
+  );
+}
+
 export function Clients() {
-  const [clients, setClients] = useState<ClientEntry[]>([]);
+  const [clients, setClients] = useState<ClientRead[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [form, setForm] = useState<ClientFormState>(EMPTY_FORM);
-  const [editingId, setEditingId] = useState<number | string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
   const [createdApiKey, setCreatedApiKey] = useState('');
 
@@ -119,7 +147,7 @@ export function Clients() {
     resetForm();
   }
 
-  function startEdit(client: ClientEntry) {
+  function startEdit(client: ClientRead) {
     setNotice('');
     setCreatedApiKey('');
     setEditingId(client.id);
@@ -147,7 +175,7 @@ export function Clients() {
     try {
       const payload = makePayload(form);
       if (editingId !== null) {
-        await updateClient(String(editingId), payload);
+        await updateClient(Number(editingId), payload);
         setNotice(`Client ${form.name.trim()} wurde aktualisiert.`);
         setCreatedApiKey('');
       } else {
@@ -164,14 +192,14 @@ export function Clients() {
     }
   }
 
-  async function handleDelete(client: ClientEntry) {
+  async function handleDelete(client: ClientRead) {
     const confirmed = window.confirm(`Client "${client.name}" wirklich löschen?`);
     if (!confirmed) return;
 
     setSaving(true);
     setError('');
     try {
-      await deleteClient(String(client.id));
+      await deleteClient(client.id);
       setNotice(`Client ${client.name} wurde gelöscht.`);
       setCreatedApiKey('');
       await loadClients();
@@ -185,11 +213,11 @@ export function Clients() {
     }
   }
 
-  async function handleToggleActive(client: ClientEntry) {
+  async function handleToggleActive(client: ClientRead) {
     setSaving(true);
     setError('');
     try {
-      await updateClient(String(client.id), { active: !client.active });
+      await updateClient(client.id, { active: !client.active });
       setNotice(`Client ${client.name} ist jetzt ${client.active ? 'inaktiv' : 'aktiv'}.`);
       await loadClients();
     } catch (err) {
@@ -260,98 +288,106 @@ export function Clients() {
         </div>
       )}
 
-      <Card title="Persistente Clients" tag={loading ? 'Lädt…' : 'LIVE'}>
+      <Card
+        title="Persistente Clients"
+        tag={loading ? 'Lädt…' : 'LIVE'}
+        headerActions={(
+          <button className="btn btn--sm btn--ghost" onClick={() => void loadClients()} disabled={loading || saving}>
+            Neu laden
+          </button>
+        )}
+      >
         {loading ? (
-          <div className="text--muted">Lade Clients aus dem Router-Backend …</div>
+          <div className="empty-state">
+            <div className="empty-state__icon">…</div>
+            <div className="empty-state__title">Clients werden geladen</div>
+            <div className="empty-state__sub">Die Verwaltungsansicht liest die aktuellen Einträge aus dem Router.</div>
+          </div>
+        ) : sortedClients.length === 0 ? (
+          <EmptyCollectionState
+            title="Keine Clients registriert"
+            description="Neue Clients erscheinen hier als Verwaltungskarten ohne lokale Drag-and-Drop-Sortierung."
+          />
         ) : (
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Name</th>
-                  <th>Beschreibung</th>
-                  <th>IP / Host</th>
-                  <th>Routen</th>
-                  <th>Fähigkeiten</th>
-                  <th>Status</th>
-                  <th>Aktionen</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedClients.map((client) => (
-                  <tr key={client.id}>
-                    <td><code>{client.id}</code></td>
-                    <td>
-                      <strong>{client.name}</strong>
-                      {client.name === 'Kids_Controller' && (
-                        <div className="text--muted" style={{ marginTop: '0.2rem' }}>
-                          Persistenter externen Client für den Kids-Controller
-                        </div>
-                      )}
-                    </td>
-                    <td className="text--muted">{client.description || '—'}</td>
-                    <td><code>{client.allowed_ip}</code></td>
-                    <td><code>{routesToText(client.allowed_routes ?? [])}</code></td>
-                    <td>
-                      <div className="stack stack--tight">
-                        <span className={`badge ${client.can_use_llm ? 'badge--ok' : 'badge--fail'}`}>
-                          <span className="badge__dot" />
-                          LLM
-                        </span>
-                        <span className={`badge ${client.can_use_tools ? 'badge--ok' : 'badge--fail'}`}>
-                          <span className="badge__dot" />
-                          Tools
-                        </span>
-                        <span className={`badge ${client.can_use_internet ? 'badge--ok' : 'badge--fail'}`}>
-                          <span className="badge__dot" />
-                          Internet
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      {client.active ? (
-                        <span className="badge badge--ok"><span className="badge__dot" />Aktiv</span>
-                      ) : (
-                        <span className="badge badge--fail"><span className="badge__dot" />Inaktiv</span>
-                      )}
-                    </td>
-                    <td>
-                      <div className="btn-group">
-                        <button
-                          className="btn btn--sm btn--ghost"
-                          onClick={() => startEdit(client)}
-                          disabled={saving}
-                        >
-                          Bearbeiten
-                        </button>
-                        <button
-                          className="btn btn--sm btn--ghost"
-                          onClick={() => handleToggleActive(client)}
-                          disabled={saving}
-                        >
-                          {client.active ? 'Deaktivieren' : 'Aktivieren'}
-                        </button>
-                        <button
-                          className="btn btn--sm btn--danger"
-                          onClick={() => handleDelete(client)}
-                          disabled={saving}
-                        >
-                          Löschen
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {sortedClients.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="text--muted" style={{ textAlign: 'center' }}>
-                      Keine Clients registriert.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <div className="entity-card-grid entity-card-grid--clients">
+            {sortedClients.map((client) => (
+              <Card
+                key={client.id}
+                className="entity-card"
+                title={client.name}
+                tag={`ID ${client.id}`}
+                headerActions={
+                  <span className={`badge ${client.active ? 'badge--ok' : 'badge--fail'}`}>
+                    <span className="badge__dot" />
+                    {client.active ? 'Aktiv' : 'Inaktiv'}
+                  </span>
+                }
+              >
+                <div className="entity-card__stack">
+                  <p className="entity-card__lead">
+                    {client.description || 'Keine Beschreibung hinterlegt.'}
+                  </p>
+                  {client.name === 'Kids_Controller' && (
+                    <div className="entity-card__note">
+                      Persistenter externer Client für den Kids-Controller.
+                    </div>
+                  )}
+
+                  <div className="entity-card__meta-grid">
+                    <MetaItem label="IP / Host" value={client.allowed_ip} />
+                    <MetaItem label="Routen" value={routesToText(client.allowed_routes ?? []) || '–'} />
+                    <MetaItem label="LLM" value={client.can_use_llm ? 'Ja' : 'Nein'} plain />
+                    <MetaItem label="Tools" value={client.can_use_tools ? 'Ja' : 'Nein'} plain />
+                    <MetaItem label="Internet" value={client.can_use_internet ? 'Ja' : 'Nein'} plain />
+                  </div>
+
+                  <div className="entity-card__section">
+                    <span className="entity-card__section-title">Fähigkeiten</span>
+                    <div className="entity-card__pill-list">
+                      <span className={`badge ${client.can_use_llm ? 'badge--ok' : 'badge--fail'}`}>
+                        <span className="badge__dot" />
+                        LLM
+                      </span>
+                      <span className={`badge ${client.can_use_tools ? 'badge--ok' : 'badge--fail'}`}>
+                        <span className="badge__dot" />
+                        Tools
+                      </span>
+                      <span className={`badge ${client.can_use_internet ? 'badge--ok' : 'badge--fail'}`}>
+                        <span className="badge__dot" />
+                        Internet
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="entity-card__footer">
+                    <div className="text--muted text--sm">Alphabetische Ansicht, keine lokale Persistenz.</div>
+                    <div className="entity-card__actions">
+                      <button
+                        className="btn btn--sm btn--ghost"
+                        onClick={() => startEdit(client)}
+                        disabled={saving}
+                      >
+                        Bearbeiten
+                      </button>
+                      <button
+                        className="btn btn--sm btn--ghost"
+                        onClick={() => handleToggleActive(client)}
+                        disabled={saving}
+                      >
+                        {client.active ? 'Deaktivieren' : 'Aktivieren'}
+                      </button>
+                      <button
+                        className="btn btn--sm btn--danger"
+                        onClick={() => handleDelete(client)}
+                        disabled={saving}
+                      >
+                        Löschen
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            ))}
           </div>
         )}
       </Card>

@@ -176,14 +176,14 @@ def save_agent_definitions(session: Session, definitions: list[AgentDefinition])
 
 
 def save_skill_definitions(session: Session) -> None:
-    from app.skills.registry import list_skills
+    from app.skills.registry import is_skill_enabled, list_all_skills
 
     try:
         existing = {
             row[0]
             for row in session.exec(select(SkillRecord.name)).all()
         }
-        definitions = list_skills()
+        definitions = list_all_skills()
         next_names = {skill.name for skill in definitions}
         for name in existing - next_names:
             record = session.exec(select(SkillRecord).where(SkillRecord.name == name)).first()
@@ -193,22 +193,26 @@ def save_skill_definitions(session: Session) -> None:
             record = session.exec(select(SkillRecord).where(SkillRecord.name == skill.name)).first()
             payload = {
                 "name": skill.name,
+                "skill_type": getattr(skill, "skill_type", "system"),
                 "description": skill.description,
                 "allowed_tools": _json_dump(list(skill.allowed_tools)),
-                "input_schema": _json_dump(skill.input_schema.model_json_schema()),
-                "output_schema": _json_dump(skill.output_schema.model_json_schema()),
+                "input_schema": _json_dump(getattr(skill, "input_schema_json", skill.input_schema.model_json_schema())),
+                "output_schema": _json_dump(getattr(skill, "output_schema_json", skill.output_schema.model_json_schema())),
+                "prompt_template": getattr(skill, "prompt_template", None),
+                "preferred_model": getattr(skill, "preferred_model", None),
+                "source_url": getattr(skill, "source_url", None),
                 "read_only": skill.read_only,
                 "version": skill.version,
-                "enabled": True,
                 "created_at": datetime.now(),
                 "updated_at": datetime.now(),
             }
             if record is None:
-                session.add(SkillRecord(**payload))
+                session.add(SkillRecord(**payload, enabled=is_skill_enabled(skill.name)))
             else:
                 for key, value in payload.items():
-                    if key not in {"created_at"}:
+                    if key not in {"created_at", "enabled"}:
                         setattr(record, key, value)
+                record.enabled = is_skill_enabled(skill.name)
                 session.add(record)
         session.commit()
     except Exception as exc:
@@ -269,6 +273,8 @@ def bootstrap_reference_data(session: Session) -> None:
         logger.warning("Agent-Referenzdaten konnten nicht gebootstrapped werden: %s", exc)
 
     try:
+        from app.skills.registry import registry as skill_registry
+        skill_registry.reload_persisted()
         save_skill_definitions(session)
     except Exception as exc:
         logger.warning("Skill-Referenzdaten konnten nicht gebootstrapped werden: %s", exc)

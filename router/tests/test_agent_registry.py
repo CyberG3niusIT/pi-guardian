@@ -1,8 +1,10 @@
 import asyncio
+import importlib
 
 import pytest
 
-from app.agents.registry import delete_agent, get_agent, list_agents
+from app.agents.registry import AgentRegistry, delete_agent, get_agent, list_agents
+from app.models.agent_models import AgentBehaviorSettings, AgentDefinition, AgentPersonalitySettings, AgentPolicySettings, AgentSettings
 from app.models.agent_models import AgentRunRequest
 from app.api.routes_agents import agent_run
 
@@ -56,12 +58,58 @@ def test_service_operator_is_registered():
     ]
 
 
+def test_kids_controller_supervisor_is_registered():
+    agent = get_agent("kids_controller_supervisor")
+    assert agent is not None
+    assert agent.agent_type == "system"
+    assert agent.settings.read_only is True
+    assert agent.settings.max_steps == 5
+    assert agent.settings.policy.allowed_skills == ["kids_controller_repetition_review"]
+    assert agent.allowed_tools == ["system_status"]
+
+
 def test_agent_registry_lists_guardian_supervisor():
     names = [agent.name for agent in list_agents()]
     assert "guardian_supervisor" in names
     assert "service_diagnose" in names
     assert "log_analyst" in names
     assert "service_operator" in names
+    assert "kids_controller_supervisor" in names
+
+
+def test_system_agent_defaults_are_not_overridden_by_persisted_records(monkeypatch):
+    agent_registry_module = importlib.import_module("app.agents.registry")
+    stale_definition = AgentDefinition(
+        name="kids_controller_supervisor",
+        description="stale",
+        agent_type="system",
+        allowed_tools=["system_status"],
+        settings=AgentSettings(
+            active=True,
+            preferred_model=None,
+            max_steps=3,
+            timeout_seconds=45,
+            read_only=True,
+            policy=AgentPolicySettings(
+                allowed_tools=["system_status"],
+                allowed_skills=["kids_controller_repetition_review"],
+                allowed_actions=[],
+                read_only=True,
+                max_steps=3,
+            ),
+            behavior=AgentBehaviorSettings(),
+            personality=AgentPersonalitySettings(),
+        ),
+        system_prompt="pending",
+    )
+
+    monkeypatch.setattr(agent_registry_module, "load_agent_records", lambda: [stale_definition])
+
+    isolated_registry = AgentRegistry()
+    agent = isolated_registry.get("kids_controller_supervisor")
+
+    assert agent is not None
+    assert agent.settings.max_steps == 5
 
 
 def test_service_diagnose_is_not_deletable():

@@ -3,10 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PI Guardian – Admin</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <title>PI Guardian – AI Platform</title>
+    <style>
+      /* Preload critical fonts from system stack — no external CDN required.
+         JetBrains Mono is declared here so the browser can find it locally
+         if the user has it installed; otherwise the CSS stack falls through
+         to Fira Code → Cascadia Code → SF Mono → ui-monospace.               */
+      @font-face {
+        font-family: 'JetBrains Mono';
+        src: local('JetBrains Mono'), local('JetBrainsMono-Regular');
+        font-weight: 400 700;
+        font-style: normal;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: 'Inter';
+        src: local('Inter'), local('Inter-Regular');
+        font-weight: 400 700;
+        font-style: normal;
+        font-display: swap;
+      }
+      /* Prevent FOUC on body background */
+      html, body { background: #f1f2f6; margin: 0; padding: 0; }
+    </style>
   </head>
   <body>
     <div id="root"></div>

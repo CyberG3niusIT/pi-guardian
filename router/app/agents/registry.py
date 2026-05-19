@@ -269,6 +269,54 @@ def _service_operator_template() -> AgentDefinition:
     )
 
 
+def _kids_controller_supervisor_template() -> AgentDefinition:
+    return AgentDefinition(
+        name="kids_controller_supervisor",
+        description=(
+            "Read-only Supervisor-Agent für Kids-Controller-Beobachtungen mit Fokus "
+            "auf häufig wiederkehrende Aufstellungen und klare Rückmeldungen."
+        ),
+        agent_type="system",
+        allowed_tools=["system_status"],
+        settings=AgentSettings(
+            active=True,
+            preferred_model=None,
+            max_steps=5,
+            timeout_seconds=45,
+            read_only=True,
+            policy=_policy_for_tools(
+                allowed_tools=["system_status"],
+                allowed_skills=["kids_controller_repetition_review"],
+                allowed_actions=[],
+                read_only=True,
+                max_steps=5,
+            ),
+            behavior={
+                "analysis_mode": "balanced",
+                "response_depth": "balanced",
+                "prioritization_style": "risks_first",
+                "uncertainty_behavior": "state_uncertainty",
+                "risk_sensitivity": "high",
+            },
+            personality={
+                "style": "analytical",
+                "tone": "direct",
+                "directness": "high",
+                "verbosity": "balanced",
+                "technical_strictness": "high",
+            },
+            custom_instruction=(
+                "Bewerte Kids-Controller-Beobachtungen knapp und klar. Nutze fuer "
+                "Wiederholungsbewertungen direkt den Skill "
+                "'kids_controller_repetition_review' und antworte danach ohne "
+                "weitere Zwischenschritte. Wenn eine Aufstellung in letzter Zeit "
+                "sehr oft vorkam, sage das explizit."
+            ),
+        ),
+        system_prompt="pending",
+    )
+
+
 def _materialize(definition: AgentDefinition) -> AgentDefinition:
     return definition.model_copy(
         update={"system_prompt": build_system_prompt(definition)}
@@ -287,12 +335,16 @@ class AgentRegistry:
             _service_diagnose_template(),
             _log_analyst_template(),
             _service_operator_template(),
+            _kids_controller_supervisor_template(),
         ):
             agent = _materialize(template)
             self._agents[agent.name] = agent
 
     def _load_persisted(self) -> None:
         for agent in load_agent_records():
+            existing = self._agents.get(agent.name)
+            if existing is not None and existing.agent_type in {"system", "actor"}:
+                continue
             self._agents[agent.name] = self._validate_and_materialize(agent)
 
     def reload_persisted(self) -> None:

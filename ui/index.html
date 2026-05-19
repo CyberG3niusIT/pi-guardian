@@ -3,13 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PI Guardian – Guardian Control</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <title>PI Guardian – AI Platform</title>
+    <style>
+      /* System-local font declarations — no external CDN required.
+         Falls through: JetBrains Mono → Fira Code → Cascadia Code → SF Mono → ui-monospace
+         Falls through: Inter → system-ui → -apple-system → Segoe UI                       */
+      @font-face {
+        font-family: 'JetBrains Mono';
+        src: local('JetBrains Mono'), local('JetBrainsMono-Regular');
+        font-weight: 400 700;
+        font-style: normal;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: 'Inter';
+        src: local('Inter'), local('Inter-Regular');
+        font-weight: 400 700;
+        font-style: normal;
+        font-display: swap;
+      }
+      /* Prevent FOUC */
+      html, body { background: #f1f2f6; margin: 0; padding: 0; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

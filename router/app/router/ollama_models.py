@@ -36,6 +36,21 @@ async def fetch_model_names() -> set[str]:
     return {model["name"] for model in await fetch_models() if model.get("name")}
 
 
+async def delete_ollama_model(name: str) -> None:
+    url = f"{settings.OLLAMA_BASE_URL}/api/delete"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.delete(url, json={"name": name})
+            if response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Modell '{name}' nicht gefunden")
+            response.raise_for_status()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("ollama_models: delete fehlgeschlagen: %s", exc)
+        raise HTTPException(status_code=502, detail="Ollama nicht erreichbar")
+
+
 async def fetch_raw_tags() -> dict:
     url = f"{settings.OLLAMA_BASE_URL}/api/tags"
     try:

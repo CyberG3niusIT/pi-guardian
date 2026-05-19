@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     ADMIN_SESSION_COOKIE_MAX_AGE: int = 60 * 60 * 24 * 365
     ADMIN_ALLOWED_IP: str = "192.168.50.0/24"
     ADMIN_ALLOWED_ROUTES: str = (
-        "/route,/health,/settings,/models,/models/select,/models/registry,/models/pull,/status/service,"
-        "/clients,/history,/logs,/agents,/skills,/actions,/memory"
+        "/route,/health,/settings,/models,/models/select,/models/registry,/models/pull,/models/delete,"
+        "/status/service,/clients,/history,/logs,/agents,/skills,/actions,/memory"
     )
 
     model_config = {"env_file": str(BASE_DIR / ".env")}

@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Card } from '../components/Card';
 import { Layout } from '../components/Layout';
+import { SortableCardGrid } from '../components/SortableCardGrid';
 import {
   ApiRequestError,
-  createModelRegistryEntry,
   createModelPullJob,
+  createModelRegistryEntry,
   deleteModelRegistryEntry,
-  fetchModelRegistry,
+  deleteOllamaModel,
   fetchModelPullJobs,
+  fetchModelRegistry,
   fetchModels,
   fetchSettings,
   sendRoute,
@@ -27,6 +30,38 @@ interface RegistryDraft {
   name: string;
   description: string;
   enabled: boolean;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '–';
+  try { return new Date(value).toLocaleString('de-DE'); } catch { return value; }
+}
+
+function EmptyCollectionState({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="empty-state">
+      <div className="empty-state__icon">□</div>
+      <div className="empty-state__title">{title}</div>
+      <div className="empty-state__sub">{description}</div>
+    </div>
+  );
+}
+
+function MetaItem({
+  label,
+  value,
+  plain = false,
+}: {
+  label: string;
+  value: ReactNode;
+  plain?: boolean;
+}) {
+  return (
+    <div className="entity-card__meta-item">
+      <span className="entity-card__meta-label">{label}</span>
+      <div className={`entity-card__meta-value${plain ? ' entity-card__meta-value--plain' : ''}`}>{value}</div>
+    </div>
+  );
 }
 
 function isReadOnlyRole(role: ModelRegistryEntry['role']) {
@@ -59,6 +94,8 @@ export function Models() {
   const [creating, setCreating] = useState(false);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deletingOllama, setDeletingOllama] = useState<string | null>(null);
+  const [deleteOllamaError, setDeleteOllamaError] = useState<string | null>(null);
   const [applyingModelName, setApplyingModelName] = useState<string | null>(null);
   const [pullModelName, setPullModelName] = useState('');
   const [pulling, setPulling] = useState(false);
@@ -147,11 +184,7 @@ export function Models() {
     setTestError(null);
     setTestResult(null);
     try {
-      const res = await sendRoute({
-        prompt: testPrompt,
-        preferred_model: preferred,
-        stream: false,
-      });
+      const res = await sendRoute(testPrompt, preferred);
       setTestResult(res);
     } catch (err) {
       setTestError(err instanceof ApiRequestError ? err.message : 'Fehler beim Testen');
@@ -256,6 +289,21 @@ export function Models() {
     }
   }
 
+  async function handleDeleteOllamaModel(name: string) {
+    if (!window.confirm(`Modell "${name}" wirklich aus Ollama löschen? Das kann nicht rückgängig gemacht werden.`)) return;
+    setDeletingOllama(name);
+    setDeleteOllamaError(null);
+    try {
+      await deleteOllamaModel(name);
+      await loadModels();
+      await loadRegistry();
+    } catch (err) {
+      setDeleteOllamaError(err instanceof ApiRequestError ? err.message : 'Löschen fehlgeschlagen');
+    } finally {
+      setDeletingOllama(null);
+    }
+  }
+
   return (
     <Layout title="Modellverwaltung">
       <div className="grid grid--feature">
@@ -266,7 +314,7 @@ export function Models() {
           </div>
           <div className="kv">
             <span className="kv__label">Deep Model</span>
-            <code className="kv__value kv__value--highlight">{settings?.large_model ?? CONFIG.largeModel}</code>
+            <code className="kv__value kv__value--highlight">{settings?.large_model ?? '–'}</code>
           </div>
           <div className="kv">
             <span className="kv__label">Backend</span>
@@ -400,40 +448,65 @@ export function Models() {
         </Card>
 
         <Card title="Installierte Modelle" tag="LIVE">
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Modell</th>
-                  <th>Größe</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {models.map((model) => (
-                  <tr key={model.name}>
-                    <td><code>{model.name}</code></td>
-                    <td>{model.size}</td>
-                    <td>
-                      {installedNames.has(model.name) ? (
-                        <span className="badge badge--ok"><span className="badge__dot" />Installiert</span>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-                {models.length === 0 && !modelsLoading && (
-                  <tr>
-                    <td colSpan={3} className="text--muted" style={{ textAlign: 'center' }}>
-                      Keine installierten Modelle gemeldet.
-                    </td>
-                  </tr>
+          <SortableCardGrid
+            items={models}
+            getItemId={(model) => `installed:${model.name}`}
+            storageKey="piGuardian.modelCardOrder"
+            emptyState={!modelsLoading ? (
+              <EmptyCollectionState
+                title="Keine installierten Modelle"
+                description="Sobald Ollama Modelle meldet, erscheinen sie hier als sortierbare Cards."
+              />
+            ) : null}
+            renderItem={(model, dragState) => (
+              <Card
+                title={model.name}
+                tag="ollama"
+                className={`entity-card${dragState.isDragging ? ' entity-card--dragging' : ''}${dragState.isDropTarget ? ' entity-card--drop-target' : ''}`}
+                headerActions={(
+                  <>
+                    <span className="badge badge--ok">
+                      <span className="badge__dot" />
+                      Installiert
+                    </span>
+                    <button {...dragState.dragHandleProps} />
+                  </>
                 )}
-              </tbody>
-            </table>
-          </div>
+              >
+                <div className="entity-card__meta-grid">
+                  <MetaItem label="Größe" value={model.size} plain />
+                  <MetaItem label="Aktualisiert" value={model.modified_at ? formatDateTime(model.modified_at) : '–'} plain />
+                </div>
+
+                <div className="entity-card__section">
+                  <span className="entity-card__section-title">Digest</span>
+                  <div className="entity-card__meta-value">{model.digest || '–'}</div>
+                </div>
+
+                <div className="entity-card__footer">
+                  <span className="text--muted text--xs">Lokal in Ollama verfügbar</span>
+                  <div className="entity-card__actions">
+                    <button
+                      className="btn btn--sm btn--danger"
+                      onClick={() => void handleDeleteOllamaModel(model.name)}
+                      disabled={deletingOllama === model.name}
+                      title={`Modell "${model.name}" aus Ollama löschen`}
+                    >
+                      {deletingOllama === model.name ? 'Lösche…' : 'Löschen'}
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            )}
+          />
           {modelsError && (
             <div className="alert alert--warn" style={{ marginTop: '1rem' }}>
               {modelsError}
+            </div>
+          )}
+          {deleteOllamaError && (
+            <div className="alert alert--error" style={{ marginTop: '1rem' }}>
+              {deleteOllamaError}
             </div>
           )}
         </Card>
@@ -470,39 +543,55 @@ export function Models() {
               {pullJobsError}
             </div>
           )}
-          <div className="table-wrap">
-            <table className="table" style={{ marginTop: '1rem' }}>
-              <thead>
-                <tr>
-                  <th>Modell</th>
-                  <th>Status</th>
-                  <th>Fortschritt</th>
-                  <th>Nachricht</th>
-                </tr>
-              </thead>
-              <tbody>
+          <div style={{ marginTop: '1rem' }}>
+            {pullJobs.length === 0 ? (
+              <EmptyCollectionState
+                title="Keine Pull-Jobs vorhanden"
+                description="Sobald ein Modell-Download gestartet wurde, erscheint der Lauf hier als responsive Karte."
+              />
+            ) : (
+              <div className="entity-card-grid entity-card-grid--compact">
                 {pullJobs.map((job) => (
-                  <tr key={job.id}>
-                    <td><code>{job.model_name}</code></td>
-                    <td>
+                  <Card
+                    key={job.id}
+                    className="entity-card"
+                    title={job.model_name}
+                    tag="PULL"
+                    headerActions={
                       <span className={`badge ${job.status === 'succeeded' ? 'badge--ok' : job.status === 'failed' ? 'badge--warn' : 'badge--info'}`}>
                         <span className="badge__dot" />
                         {job.status}
                       </span>
-                    </td>
-                    <td>{job.progress_percent !== null && job.progress_percent !== undefined ? `${job.progress_percent} %` : '–'}</td>
-                    <td>{job.progress_message}</td>
-                  </tr>
+                    }
+                  >
+                    <div className="entity-card__stack">
+                      <div className="entity-card__meta-grid">
+                        <MetaItem
+                          label="Fortschritt"
+                          value={job.progress_percent !== null && job.progress_percent !== undefined ? `${job.progress_percent} %` : '–'}
+                          plain
+                        />
+                        <MetaItem label="Job ID" value={String(job.id)} plain />
+                        <MetaItem label="Erstellt" value={formatDateTime(job.created_at)} plain />
+                        <MetaItem label="Aktualisiert" value={formatDateTime(job.updated_at)} plain />
+                      </div>
+                      <div className="entity-card__section">
+                        <span className="entity-card__section-title">Nachricht</span>
+                        <div className="entity-card__note">
+                          {job.progress_message || 'Noch keine Fortschrittsmeldung vorhanden.'}
+                        </div>
+                      </div>
+                      {job.status === 'failed' && job.progress_message && (
+                        <div className="entity-card__section">
+                          <span className="entity-card__section-title">Fehler</span>
+                          <div className="entity-card__note">{job.progress_message}</div>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
                 ))}
-                {pullJobs.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="text--muted" style={{ textAlign: 'center' }}>
-                      Keine Pull-Jobs vorhanden.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+              </div>
+            )}
           </div>
         </Card>
       </div>
@@ -513,165 +602,170 @@ export function Models() {
             Die Registry ist die Backend-Quelle für zusätzliche Modelle. Kernmodelle werden
             über die Router-Settings verwaltet und nur hier gespiegelt angezeigt.
           </p>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Modell</th>
-                  <th>Rolle</th>
-                  <th>Beschreibung</th>
-                  <th>Installiert</th>
-                  <th>Aktiv</th>
-                  <th>Aktionen</th>
-                </tr>
-              </thead>
-              <tbody>
-                {registry.map((entry) => {
-                  const installed = installedNames.has(entry.name);
-                  const isReadOnly = isReadOnlyRole(entry.role);
-                  return (
-                    <tr key={entry.id}>
-                      <td style={{ minWidth: '12rem' }}>
-                        {isReadOnly ? (
-                          <code>{entry.name}</code>
-                        ) : (
-                          <input
-                            className="form-input"
-                            value={entry.name}
-                            onChange={(e) =>
-                              setRegistry((prev) =>
-                                prev.map((item) =>
-                                  item.id === entry.id ? { ...item, name: e.target.value } : item,
-                                ),
-                              )
-                            }
-                          />
-                        )}
-                      </td>
-                      <td>
-                        <span className="badge badge--info">
+          <SortableCardGrid
+            items={registry}
+            getItemId={(entry) => `registry:${entry.id}`}
+            storageKey="piGuardian.modelCardOrder"
+            emptyState={!registryLoading ? (
+              <EmptyCollectionState
+                title="Keine Registry-Einträge"
+                description="Neue Registry-Modelle erscheinen hier als bearbeitbare Cards."
+              />
+            ) : null}
+            renderItem={(entry, dragState) => {
+              const installed = installedNames.has(entry.name);
+              const isReadOnly = isReadOnlyRole(entry.role);
+
+              return (
+                <Card
+                  title={entry.name}
+                  tag={entry.role}
+                  className={`entity-card${dragState.isDragging ? ' entity-card--dragging' : ''}${dragState.isDropTarget ? ' entity-card--drop-target' : ''}`}
+                  headerActions={(
+                    <>
+                      <span className={`badge ${installed ? 'badge--ok' : 'badge--warn'}`}>
+                        <span className="badge__dot" />
+                        {installed ? 'Installiert' : 'Fehlt'}
+                      </span>
+                      <span className={`badge ${entry.enabled ? 'badge--ok' : 'badge--warn'}`}>
+                        <span className="badge__dot" />
+                        {entry.enabled ? 'Aktiv' : 'Inaktiv'}
+                      </span>
+                      {isReadOnly ? (
+                        <span className="badge badge--warn">
                           <span className="badge__dot" />
-                          {entry.role}
+                          Read only
                         </span>
-                      </td>
-                      <td style={{ minWidth: '16rem' }}>
-                        {isReadOnly ? (
-                          entry.description
-                        ) : (
-                          <input
-                            className="form-input"
-                            value={entry.description}
-                            onChange={(e) =>
-                              setRegistry((prev) =>
-                                prev.map((item) =>
-                                  item.id === entry.id
-                                    ? { ...item, description: e.target.value }
-                                    : item,
-                                ),
-                              )
-                            }
-                          />
-                        )}
-                      </td>
-                      <td>
-                        {installed ? (
-                          <span className="badge badge--ok"><span className="badge__dot" />Ja</span>
-                        ) : (
-                          <span className="badge badge--warn"><span className="badge__dot" />Nein</span>
-                        )}
-                      </td>
-                      <td>
-                        {isReadOnly ? (
-                          <span className={`badge ${entry.enabled ? 'badge--ok' : 'badge--warn'}`}>
-                            <span className="badge__dot" />
-                            {entry.enabled ? 'Aktiv' : 'Inaktiv'}
-                          </span>
-                        ) : (
-                          <div className="toggle-row">
-                            <button
-                              className={`btn btn--sm ${entry.enabled ? 'btn--active' : 'btn--ghost'}`}
-                              onClick={() =>
-                                setRegistry((prev) =>
-                                  prev.map((item) =>
-                                    item.id === entry.id ? { ...item, enabled: true } : item,
-                                  ),
-                                )
-                              }
-                            >
-                              Ein
-                            </button>
-                            <button
-                              className={`btn btn--sm ${!entry.enabled ? 'btn--active' : 'btn--ghost'}`}
-                              onClick={() =>
-                                setRegistry((prev) =>
-                                  prev.map((item) =>
-                                    item.id === entry.id ? { ...item, enabled: false } : item,
-                                  ),
-                                )
-                              }
-                            >
-                              Aus
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        <div className="toggle-row">
-                          {!isReadOnly && (
-                            <>
-                              <button
-                                className="btn btn--sm"
-                                onClick={() => void handleSaveRegistryEntry(entry)}
-                                disabled={savingId === entry.id}
-                              >
-                                {savingId === entry.id ? 'Speichere…' : 'Speichern'}
-                              </button>
-                              <button
-                                className="btn btn--sm btn--ghost"
-                                onClick={() => void handleDeleteRegistryEntry(entry)}
-                                disabled={deletingId === entry.id}
-                              >
-                                {deletingId === entry.id ? 'Lösche…' : 'Löschen'}
-                              </button>
-                            </>
-                          )}
+                      ) : null}
+                      <button {...dragState.dragHandleProps} />
+                    </>
+                  )}
+                >
+                  {isReadOnly ? (
+                    <div className="entity-card__stack">
+                      <p className="entity-card__lead">{entry.description || 'Keine Beschreibung vorhanden.'}</p>
+                      <div className="entity-card__meta-grid">
+                        <MetaItem label="Erstellt" value={formatDateTime(entry.created_at)} plain />
+                        <MetaItem label="Aktualisiert" value={formatDateTime(entry.updated_at)} plain />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="entity-card__input-grid">
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label">Modellname</label>
+                        <input
+                          className="form-input"
+                          value={entry.name}
+                          onChange={(e) =>
+                            setRegistry((prev) =>
+                              prev.map((item) =>
+                                item.id === entry.id ? { ...item, name: e.target.value } : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label">Beschreibung</label>
+                        <textarea
+                          className="form-input form-input--textarea"
+                          rows={3}
+                          value={entry.description}
+                          onChange={(e) =>
+                            setRegistry((prev) =>
+                              prev.map((item) =>
+                                item.id === entry.id ? { ...item, description: e.target.value } : item,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="entity-card__meta-grid">
+                    <MetaItem label="Erstellt" value={formatDateTime(entry.created_at)} plain />
+                    <MetaItem label="Aktualisiert" value={formatDateTime(entry.updated_at)} plain />
+                  </div>
+
+                  <div className="entity-card__footer">
+                    {isReadOnly ? (
+                      <span className="text--muted text--xs">Kernrolle aus Router-Settings gespiegelt</span>
+                    ) : (
+                      <div className="toggle-row" style={{ marginTop: 0 }}>
+                        <button
+                          className={`btn btn--sm ${entry.enabled ? 'btn--active' : 'btn--ghost'}`}
+                          onClick={() =>
+                            setRegistry((prev) =>
+                              prev.map((item) =>
+                                item.id === entry.id ? { ...item, enabled: true } : item,
+                              ),
+                            )
+                          }
+                        >
+                          Ein
+                        </button>
+                        <button
+                          className={`btn btn--sm ${!entry.enabled ? 'btn--active' : 'btn--ghost'}`}
+                          onClick={() =>
+                            setRegistry((prev) =>
+                              prev.map((item) =>
+                                item.id === entry.id ? { ...item, enabled: false } : item,
+                              ),
+                            )
+                          }
+                        >
+                          Aus
+                        </button>
+                      </div>
+                    )}
+                    <div className="entity-card__actions">
+                      {!isReadOnly && (
+                        <>
                           <button
                             className="btn btn--sm"
-                            onClick={() => void handleApplyAsDefault(entry.name)}
-                            disabled={
-                              applyingModelName === entry.name ||
-                              !installed ||
-                              settings?.large_model === entry.name
-                            }
+                            onClick={() => void handleSaveRegistryEntry(entry)}
+                            disabled={savingId === entry.id}
                           >
-                            Als Fast Model
+                            {savingId === entry.id ? 'Speichere…' : 'Speichern'}
                           </button>
                           <button
                             className="btn btn--sm btn--ghost"
-                            onClick={() => void handleApplyAsLarge(entry.name)}
-                            disabled={
-                              applyingModelName === entry.name ||
-                              !installed ||
-                              settings?.default_model === entry.name
-                            }
+                            onClick={() => void handleDeleteRegistryEntry(entry)}
+                            disabled={deletingId === entry.id}
                           >
-                            Als Deep Model
+                            {deletingId === entry.id ? 'Lösche…' : 'Löschen'}
                           </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {registry.length === 0 && !registryLoading && (
-                  <tr>
-                    <td colSpan={6} className="text--muted" style={{ textAlign: 'center' }}>
-                      Noch keine Registry-Einträge vorhanden.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                        </>
+                      )}
+                      <button
+                        className="btn btn--sm"
+                        onClick={() => void handleApplyAsDefault(entry.name)}
+                        disabled={
+                          applyingModelName === entry.name ||
+                          !installed ||
+                          settings?.large_model === entry.name
+                        }
+                      >
+                        Als Fast Model
+                      </button>
+                      <button
+                        className="btn btn--sm btn--ghost"
+                        onClick={() => void handleApplyAsLarge(entry.name)}
+                        disabled={
+                          applyingModelName === entry.name ||
+                          !installed ||
+                          settings?.default_model === entry.name
+                        }
+                      >
+                        Als Deep Model
+                      </button>
+                    </div>
+                  </div>
+                </Card>
+              );
+            }}
+          />
           {registryError && (
             <div className="alert alert--warn" style={{ marginTop: '1rem' }}>
               {registryError}

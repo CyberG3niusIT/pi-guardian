@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from app.router.classifier import select_model
 from app.router.decision.models import RequestClassification, RequestDecision
 from app.schemas.request_models import RouteRequest
@@ -29,9 +31,13 @@ _INTERNET_KEYWORDS = (
 _TOOL_HINTS = {
     "system_status": ("systemstatus", "system status", "cpu", "ram", "speicher", "last"),
     "docker_status": ("docker", "container", "compose", "image", "images"),
-    "service_status": ("service", "dienst", "systemd", "status", "uptime", "pid"),
+    "service_status": ("service", "dienst", "systemd", "service-status", "dienststatus", "uptime", "pid"),
     "router_logs": ("log", "logs", "journal", "fehlermeldung", "traceback"),
 }
+
+
+def _contains_tool_keyword(prompt_lower: str, keyword: str) -> bool:
+    return re.search(rf"(?<![\w-]){re.escape(keyword)}(?![\w-])", prompt_lower) is not None
 
 
 def classify_request(request: RouteRequest) -> RequestDecision:
@@ -62,7 +68,7 @@ def classify_request(request: RouteRequest) -> RequestDecision:
 
     matched_tools: list[str] = []
     for tool_name, keywords in _TOOL_HINTS.items():
-        if any(keyword in prompt_lower for keyword in keywords):
+        if any(_contains_tool_keyword(prompt_lower, keyword) for keyword in keywords):
             matched_tools.append(tool_name)
 
     if matched_tools:
