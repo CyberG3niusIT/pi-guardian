@@ -54,6 +54,8 @@ from app.router.auth import (
 )
 from app.router.classifier import select_model_for_prompt
 from app.router.clients import router as clients_router
+from app.router.decision.classifier import classify_request
+from app.router.decision.models import RequestClassification
 from app.router.errors import RouterApiError
 from app.router.history import create_route_history_entry, list_route_history
 from app.router.model_registry import sync_model_registry
@@ -241,6 +243,33 @@ async def _proxy_to_ollama(
     client_name: str | None,
 ):
     request_id = str(uuid.uuid4())
+    decision = classify_request(RouteRequest(prompt=prompt))
+    if decision.classification is RequestClassification.BLOCKED:
+        create_route_history_entry(
+            session,
+            request_id=request_id,
+            prompt_preview=_prompt_preview(prompt),
+            model=None,
+            success=False,
+            error_code="request_blocked",
+            client_name=client_name,
+            duration_ms=0,
+            decision_classification=decision.classification.value,
+            decision_reasons=decision.reasons,
+            decision_tool_hints=decision.tool_hints,
+            decision_internet_hints=decision.internet_hints,
+            execution_mode="llm",
+            execution_status="failed",
+            execution_error="request_blocked",
+        )
+        raise RouterApiError(
+            message="Anfrage wurde durch die vorgelagerte Entscheidungslogik blockiert",
+            status_code=403,
+            code="request_blocked",
+            request_id=request_id,
+            retryable=False,
+        )
+
     selected_model = select_model_for_prompt(prompt)
     outgoing_payload = dict(payload)
     outgoing_payload["model"] = selected_model

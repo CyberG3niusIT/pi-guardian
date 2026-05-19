@@ -60,3 +60,11 @@ def test_classify_request_blocked():
     assert decision.classification is RequestClassification.BLOCKED
     assert decision.blocked is True
     assert decision.selected_model is None
+
+
+def test_classify_destructive_shell_request_blocked():
+    decision = classify_request(RouteRequest(prompt="Bitte rm -rf /tmp/test ausführen und Dateien löschen"))
+
+    assert decision.classification is RequestClassification.BLOCKED
+    assert decision.blocked is True
+    assert decision.selected_model is None

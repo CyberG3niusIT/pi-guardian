@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     ROUTER_PORT: int = 8071
     LOG_LEVEL: str = "INFO"
     DEFAULT_MODEL: str = "qwen2.5-coder:1.5b"
+    FAST_MODEL: str = "fast"
     LARGE_MODEL: str = "qwen2.5-coder:3b"
     REQUEST_TIMEOUT: int = 120
     STREAM_DEFAULT: bool = False

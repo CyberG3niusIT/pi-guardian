@@ -9,8 +9,21 @@ async def generate_with_ollama(
     stream: bool = False,
     timeout: float = TIMEOUT_ROUTE,
     session_id: str | None = None,
+    format: str | None = None,
+    response_format: str | None = None,
+    required_json_keys: list[str] | None = None,
 ) -> dict:
-    return await wrapper.generate(model, prompt, request_id, stream=stream, timeout=timeout, session_id=session_id)
+    return await wrapper.generate(
+        model,
+        prompt,
+        request_id,
+        stream=stream,
+        timeout=timeout,
+        session_id=session_id,
+        format=format,
+        response_format=response_format,
+        required_json_keys=required_json_keys,
+    )
 
 
 async def post_to_ollama(

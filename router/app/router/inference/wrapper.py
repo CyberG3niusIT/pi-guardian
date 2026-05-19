@@ -123,11 +123,20 @@ async def generate(
     stream: bool = False,
     timeout: float = TIMEOUT_ROUTE,
     session_id: str | None = None,
+    format: str | None = None,
+    response_format: str | None = None,
+    required_json_keys: list[str] | None = None,
 ) -> dict:
     url = f"{settings.OLLAMA_BASE_URL}/api/generate"
     payload: dict = {"model": model, "prompt": prompt, "stream": stream}
     if session_id is not None:
         payload["session_id"] = session_id
+    if format is not None:
+        payload["format"] = format
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if required_json_keys is not None:
+        payload["required_json_keys"] = required_json_keys
     response = await _post_with_retry(url, payload, timeout, request_id, model)
     return response.json()
 

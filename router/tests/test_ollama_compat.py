@@ -1,8 +1,11 @@
 import asyncio
 
+import pytest
+
 from app.main import _extract_text_content, _prompt_from_chat_payload
 from app.router.classifier import select_model_for_prompt
 from app.main import _proxy_to_ollama
+from app.router.errors import RouterApiError
 from app.router.settings_reader import get_settings
 
 
@@ -18,12 +21,12 @@ def _collect_stream_body(response) -> list[bytes]:
 
 def test_select_model_for_prompt_uses_large_model_for_complex_keywords():
     model = select_model_for_prompt("Bitte architektur analysieren und debuggen")
-    assert model == "qwen2.5-coder:3b"
+    assert model == get_settings()["large_model"]
 
 
 def test_select_model_for_prompt_uses_default_model_for_simple_prompt():
     model = select_model_for_prompt("Antworte nur mit OK")
-    assert model == "qwen2.5-coder:1.5b"
+    assert model == get_settings()["default_model"]
 
 
 def test_extract_text_content_handles_string_and_part_list():
@@ -85,3 +88,33 @@ def test_proxy_to_ollama_stream_logs_history(monkeypatch):
     assert history_calls[0]["success"] is True
     assert history_calls[0]["model"] == "test-model"
     assert history_calls[0]["client_name"] == "client-a"
+
+
+def test_proxy_to_ollama_blocks_destructive_prompt_before_forwarding(monkeypatch):
+    history_calls: list[dict] = []
+
+    async def fail_post_to_ollama(*args, **kwargs):
+        raise AssertionError("Blocked proxy prompts must not reach inference")
+
+    def fake_create_route_history_entry(session, **kwargs):
+        history_calls.append(kwargs)
+
+    monkeypatch.setattr("app.main.post_to_ollama", fail_post_to_ollama)
+    monkeypatch.setattr("app.main.create_route_history_entry", fake_create_route_history_entry)
+
+    with pytest.raises(RouterApiError) as raised:
+        asyncio.run(
+            _proxy_to_ollama(
+                "/api/generate",
+                {"prompt": "Bitte rm -rf /tmp/test ausführen", "stream": False},
+                "Bitte rm -rf /tmp/test ausführen",
+                session=object(),
+                client_name="client-a",
+            )
+        )
+
+    assert raised.value.code == "request_blocked"
+    assert raised.value.status_code == 403
+    assert len(history_calls) == 1
+    assert history_calls[0]["success"] is False
+    assert history_calls[0]["error_code"] == "request_blocked"
