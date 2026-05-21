@@ -15,7 +15,8 @@ class Client(SQLModel, table=True):
     # Kommasepariert gespeichert, als list[str] über die API exponiert
     allowed_routes: str = (
         "/route,/health,/settings,/models,/models/select,/status/service,"
-        "/clients,/history,/logs,/agents,/skills,/actions,/memory"
+        "/clients,/history,/logs,/agents,/skills,/actions,/memory,"
+        "/v1/models,/v1/chat/completions"
     )
     api_key: str = Field(unique=True)
     can_use_llm: bool = True
@@ -49,6 +50,8 @@ class ClientCreate(SQLModel):
             "/skills",
             "/actions",
             "/memory",
+            "/v1/models",
+            "/v1/chat/completions",
         ]
     )
     can_use_llm: bool = True

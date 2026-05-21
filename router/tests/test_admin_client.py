@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.models.client import Client
+from app.config import settings
 from app.router.admin_client import ensure_admin_client
 
 
@@ -50,3 +51,15 @@ def test_ensure_admin_client_uses_configured_admin_api_key(monkeypatch):
     assert client.api_key == "Alex-ist-der-Ultra-Admin-2026"
     assert stored is not None
     assert stored.api_key == "Alex-ist-der-Ultra-Admin-2026"
+
+
+def test_default_admin_routes_include_mobile_ai_paths():
+    routes = {route.strip() for route in settings.ADMIN_ALLOWED_ROUTES.split(",")}
+
+    assert "/agents" in routes
+    assert "/skills" in routes
+    assert "/api/tags" in routes
+    assert "/api/generate" in routes
+    assert "/api/chat" in routes
+    assert "/v1/models" in routes
+    assert "/v1/chat/completions" in routes

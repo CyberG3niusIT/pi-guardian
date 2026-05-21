@@ -26,7 +26,8 @@ class Settings(BaseSettings):
     ADMIN_ALLOWED_IP: str = "192.168.50.0/24"
     ADMIN_ALLOWED_ROUTES: str = (
         "/route,/health,/settings,/models,/models/select,/models/registry,/models/pull,/models/delete,"
-        "/status/service,/clients,/history,/logs,/agents,/skills,/actions,/memory"
+        "/status/service,/clients,/history,/logs,/agents,/skills,/actions,/memory,"
+        "/api/tags,/api/generate,/api/chat,/v1/models,/v1/chat/completions"
     )
 
     model_config = {"env_file": str(BASE_DIR / ".env")}
