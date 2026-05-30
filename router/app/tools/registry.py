@@ -59,6 +59,8 @@ def list_tool_names() -> list[str]:
 
 
 from app.tools.docker_status_tool import DockerStatusTool
+from app.tools.guardian_action_tool import GuardianActionTool
+from app.tools.guardian_status_tool import GuardianStatusTool
 from app.tools.router_logs_tool import RouterLogsTool
 from app.tools.service_status_tool import ServiceStatusTool
 from app.tools.system_status_tool import SystemStatusTool
@@ -69,5 +71,7 @@ for _tool in (
     DockerStatusTool(),
     ServiceStatusTool(),
     RouterLogsTool(),
+    GuardianStatusTool(),
+    GuardianActionTool(),
 ):
     registry.register(_tool)
