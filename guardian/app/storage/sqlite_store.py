@@ -11,6 +11,9 @@ from threading import Lock
 
 from guardian.app.core.domain import GuardianSeverity
 from guardian.app.storage.models import (
+    GuardianActionHistory,
+    GuardianActionInput,
+    GuardianActionRecord,
     GuardianAlertHistory,
     GuardianAlertInput,
     GuardianAlertRecord,
@@ -76,6 +79,15 @@ class GuardianSQLiteStore:
 
     async def get_last_alert_for_key(self, alert_key: str) -> GuardianAlertRecord | None:
         return await asyncio.to_thread(self._get_last_alert_for_key_sync, alert_key)
+
+    async def record_action(self, action: GuardianActionInput) -> GuardianActionRecord:
+        return await asyncio.to_thread(self._record_action_sync, action)
+
+    async def list_actions(self, limit: int = 20) -> GuardianActionHistory:
+        return await asyncio.to_thread(self._list_actions_sync, limit)
+
+    async def list_actions_for_id(self, action_id: str, since_iso: str) -> list[GuardianActionRecord]:
+        return await asyncio.to_thread(self._list_actions_for_id_sync, action_id, since_iso)
 
     def _connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path, timeout=5.0)
@@ -176,6 +188,52 @@ class GuardianSQLiteStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_alert_events_key ON alert_events(alert_key, checked_at DESC)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS action_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    action_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    dry_run INTEGER NOT NULL,
+                    trigger TEXT NOT NULL,
+                    trigger_snapshot_id INTEGER,
+                    executed INTEGER NOT NULL,
+                    success INTEGER NOT NULL,
+                    exit_code INTEGER,
+                    duration_ms INTEGER,
+                    command TEXT NOT NULL,
+                    error TEXT,
+                    source TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_action_events_created_at ON action_events(created_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_action_events_action_id ON action_events(action_id, created_at DESC)"
+            )
+            self._migrate_columns(conn)
+
+    def _migrate_columns(self, conn: sqlite3.Connection) -> None:
+        """Additively add newer nullable columns to existing databases."""
+
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(status_snapshots)").fetchall()}
+        additions = {
+            "systemd_status": "TEXT",
+            "docker_status": "TEXT",
+            "systemd_summary": "TEXT",
+            "docker_summary": "TEXT",
+            "systemd_reason_codes_json": "TEXT",
+            "docker_reason_codes_json": "TEXT",
+        }
+        for column, column_type in additions.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE status_snapshots ADD COLUMN {column} {column_type}")
 
     def _record_cycle_sync(self, snapshot: GuardianSnapshotInput) -> GuardianPersistenceReceipt:
         if self._init_error is not None:
@@ -244,6 +302,12 @@ class GuardianSQLiteStore:
                 overview_reason_codes_json,
                 router_reason_codes_json,
                 system_reason_codes_json,
+                systemd_status,
+                docker_status,
+                systemd_summary,
+                docker_summary,
+                systemd_reason_codes_json,
+                docker_reason_codes_json,
                 router_access_state,
                 router_readiness_state,
                 router_reachable,
@@ -255,7 +319,7 @@ class GuardianSQLiteStore:
                 system_temperature_c,
                 evidence_json,
                 stored_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.checked_at.isoformat().replace("+00:00", "Z"),
@@ -268,6 +332,12 @@ class GuardianSQLiteStore:
                 self._json(snapshot.overview_reason_codes),
                 self._json(snapshot.router_reason_codes),
                 self._json(snapshot.system_reason_codes),
+                snapshot.systemd_status.value if snapshot.systemd_status is not None else None,
+                snapshot.docker_status.value if snapshot.docker_status is not None else None,
+                snapshot.systemd_summary,
+                snapshot.docker_summary,
+                self._json(snapshot.systemd_reason_codes),
+                self._json(snapshot.docker_reason_codes),
                 snapshot.router_access_state,
                 snapshot.router_readiness_state,
                 int(snapshot.router_reachable),
@@ -466,6 +536,88 @@ class GuardianSQLiteStore:
             return None
         return self._row_to_alert_record(row)
 
+    def _record_action_sync(self, action: GuardianActionInput) -> GuardianActionRecord:
+        if self._init_error is not None:
+            raise RuntimeError(self._init_error)
+        with self._lock, self._connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO action_events (
+                    created_at, action_id, kind, target, outcome, dry_run, trigger,
+                    trigger_snapshot_id, executed, success, exit_code, duration_ms,
+                    command, error, source, evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    action.created_at.isoformat().replace("+00:00", "Z"),
+                    action.action_id,
+                    action.kind,
+                    action.target,
+                    action.outcome,
+                    int(action.dry_run),
+                    action.trigger,
+                    action.trigger_snapshot_id,
+                    int(action.executed),
+                    int(action.success),
+                    action.exit_code,
+                    action.duration_ms,
+                    action.command,
+                    action.error,
+                    action.source,
+                    self._json(action.evidence),
+                ),
+            )
+            row = conn.execute("SELECT * FROM action_events WHERE id = ?", (int(cursor.lastrowid),)).fetchone()
+            if row is None:
+                raise RuntimeError("failed to load inserted action event")
+            return self._row_to_action_record(row)
+
+    def _list_actions_sync(self, limit: int) -> GuardianActionHistory:
+        if self._init_error is not None:
+            return GuardianActionHistory()
+        safe_limit = max(int(limit), 1)
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM action_events ORDER BY id DESC LIMIT ?",
+                (safe_limit,),
+            ).fetchall()
+        return GuardianActionHistory(items=[self._row_to_action_record(row) for row in rows])
+
+    def _list_actions_for_id_sync(self, action_id: str, since_iso: str) -> list[GuardianActionRecord]:
+        if self._init_error is not None:
+            return []
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM action_events
+                WHERE action_id = ? AND created_at >= ?
+                ORDER BY id DESC
+                """,
+                (action_id, since_iso),
+            ).fetchall()
+        return [self._row_to_action_record(row) for row in rows]
+
+    def _row_to_action_record(self, row: sqlite3.Row) -> GuardianActionRecord:
+        return GuardianActionRecord(
+            id=int(row["id"]),
+            created_at=self._parse_datetime(row["created_at"]),
+            action_id=row["action_id"],
+            kind=row["kind"],
+            target=row["target"],
+            outcome=row["outcome"],
+            dry_run=bool(row["dry_run"]),
+            trigger=row["trigger"],
+            trigger_snapshot_id=row["trigger_snapshot_id"],
+            executed=bool(row["executed"]),
+            success=bool(row["success"]),
+            exit_code=row["exit_code"],
+            duration_ms=row["duration_ms"],
+            command=row["command"],
+            error=row["error"],
+            source=row["source"],
+            evidence=self._json_loads(row["evidence_json"]),
+        )
+
     def _load_last_snapshot_row(self, conn: sqlite3.Connection) -> sqlite3.Row | None:
         row = conn.execute(
             """
@@ -490,6 +642,12 @@ class GuardianSQLiteStore:
             overview_reason_codes=self._json_loads(row["overview_reason_codes_json"]),
             router_reason_codes=self._json_loads(row["router_reason_codes_json"]),
             system_reason_codes=self._json_loads(row["system_reason_codes_json"]),
+            systemd_status=GuardianSeverity(row["systemd_status"]) if row["systemd_status"] else None,
+            docker_status=GuardianSeverity(row["docker_status"]) if row["docker_status"] else None,
+            systemd_summary=row["systemd_summary"] or "",
+            docker_summary=row["docker_summary"] or "",
+            systemd_reason_codes=self._json_loads(row["systemd_reason_codes_json"]) or [],
+            docker_reason_codes=self._json_loads(row["docker_reason_codes_json"]) or [],
             router_access_state=row["router_access_state"],
             router_readiness_state=row["router_readiness_state"],
             router_reachable=bool(row["router_reachable"]),

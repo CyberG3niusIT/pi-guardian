@@ -1,0 +1,18 @@
+[Unit]
+Description=PI Guardian Operations Watchdog
+After=network-online.target pi-guardian-router.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alex
+Group=alex
+WorkingDirectory=/home/alex/pi-guardian
+EnvironmentFile=/home/alex/pi-guardian/guardian/.env
+Environment=PYTHONPATH=/home/alex/pi-guardian
+ExecStart=/bin/sh -c 'exec /home/alex/pi-guardian/.venv/bin/uvicorn guardian.app.main:app --proxy-headers --host "${GUARDIAN_HOST:-127.0.0.1}" --port "${GUARDIAN_PORT:-8072}"'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

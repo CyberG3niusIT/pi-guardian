@@ -1,0 +1,10 @@
+# PI Guardian — Laufzeitabhängigkeiten
+# Werden vom gemeinsamen Repo-venv (/home/alex/pi-guardian/.venv) bereitgestellt.
+# Versionen an router/app/requirements.txt angelehnt, damit beide Dienste konsistent bleiben.
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+httpx==0.27.2
+pydantic==2.9.2
+pydantic-settings==2.5.2
+sqlmodel==0.0.21
+PyYAML==6.0.3

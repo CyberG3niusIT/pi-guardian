@@ -4,8 +4,9 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
+from guardian.app.config.models import GuardianThresholds
 from guardian.app.core.domain import GuardianSeverity, GuardianSignalSource
-from guardian.app.evaluators.common import GuardianEvaluationReason
+from guardian.app.core.evaluation import GuardianEvaluationReason
 from guardian.app.system.models import GuardianSystemCollectorState
 
 
@@ -18,7 +19,14 @@ class GuardianSystemEvaluation(BaseModel):
 
 
 class SystemEvaluator:
-    """Deterministically evaluates the normalized local system state."""
+    """Deterministically evaluates the normalized local system state.
+
+    Thresholds come from configuration; the defaults reproduce the values that
+    were previously hard-coded here.
+    """
+
+    def __init__(self, *, thresholds: GuardianThresholds | None = None) -> None:
+        self._t = thresholds or GuardianThresholds()
 
     def evaluate(self, system_state: GuardianSystemCollectorState) -> GuardianSystemEvaluation:
         reasons: list[GuardianEvaluationReason] = []
@@ -28,6 +36,7 @@ class SystemEvaluator:
 
         self._evaluate_cpu(system_state, reasons)
         self._evaluate_memory(system_state, reasons)
+        self._evaluate_swap(system_state, reasons)
         self._evaluate_disk(system_state, reasons)
         self._evaluate_temperature(system_state, reasons)
         self._evaluate_privileges(system_state, reasons)
@@ -85,7 +94,9 @@ class SystemEvaluator:
             )
             return
 
-        if cpu_usage >= 95.0 or (load_ratio is not None and load_ratio >= 2.5):
+        if cpu_usage >= self._t.cpu.usage_critical_percent or (
+            load_ratio is not None and load_ratio >= self._t.cpu.load_ratio_critical
+        ):
             reasons.append(
                 GuardianEvaluationReason(
                     code="system_cpu_critical",
@@ -101,7 +112,9 @@ class SystemEvaluator:
                     },
                 )
             )
-        elif cpu_usage >= 80.0 or (load_ratio is not None and load_ratio >= 1.5):
+        elif cpu_usage >= self._t.cpu.usage_warn_percent or (
+            load_ratio is not None and load_ratio >= self._t.cpu.load_ratio_warn
+        ):
             reasons.append(
                 GuardianEvaluationReason(
                     code="system_cpu_warn",
@@ -137,7 +150,9 @@ class SystemEvaluator:
             )
             return
 
-        if memory_usage >= 95.0 or (memory_available is not None and memory_available <= 256 * 1024 * 1024):
+        if memory_usage >= self._t.memory.usage_critical_percent or (
+            memory_available is not None and memory_available <= self._t.memory.available_critical_bytes
+        ):
             reasons.append(
                 GuardianEvaluationReason(
                     code="system_memory_critical",
@@ -152,7 +167,9 @@ class SystemEvaluator:
                     },
                 )
             )
-        elif memory_usage >= 85.0 or (memory_available is not None and memory_available <= 1024 * 1024 * 1024):
+        elif memory_usage >= self._t.memory.usage_warn_percent or (
+            memory_available is not None and memory_available <= self._t.memory.available_warn_bytes
+        ):
             reasons.append(
                 GuardianEvaluationReason(
                     code="system_memory_warn",
@@ -164,6 +181,48 @@ class SystemEvaluator:
                         "memory_usage_percent": memory_usage,
                         "memory_available_bytes": memory_available,
                         "memory_total_bytes": system_state.memory_total_bytes,
+                    },
+                )
+            )
+
+    def _evaluate_swap(
+        self,
+        system_state: GuardianSystemCollectorState,
+        reasons: list[GuardianEvaluationReason],
+    ) -> None:
+        swap_total = system_state.swap_total_bytes
+        swap_usage = system_state.swap_usage_percent
+        # No swap configured, or unreadable -> nothing to evaluate.
+        if not swap_total or swap_usage is None:
+            return
+
+        if swap_usage >= self._t.swap.usage_critical_percent:
+            reasons.append(
+                GuardianEvaluationReason(
+                    code="system_swap_critical",
+                    summary="Swap usage is critical.",
+                    severity=GuardianSeverity.CRITICAL,
+                    source=GuardianSignalSource.SYSTEM,
+                    detail="Swap usage crossed the critical threshold.",
+                    evidence={
+                        "swap_usage_percent": swap_usage,
+                        "swap_total_bytes": swap_total,
+                        "swap_free_bytes": system_state.swap_free_bytes,
+                    },
+                )
+            )
+        elif swap_usage >= self._t.swap.usage_warn_percent:
+            reasons.append(
+                GuardianEvaluationReason(
+                    code="system_swap_warn",
+                    summary="Swap usage is elevated.",
+                    severity=GuardianSeverity.WARN,
+                    source=GuardianSignalSource.SYSTEM,
+                    detail="Swap usage crossed the warning threshold.",
+                    evidence={
+                        "swap_usage_percent": swap_usage,
+                        "swap_total_bytes": swap_total,
+                        "swap_free_bytes": system_state.swap_free_bytes,
                     },
                 )
             )
@@ -188,7 +247,9 @@ class SystemEvaluator:
             )
             return
 
-        if disk_usage >= 95.0 or (disk_free is not None and disk_free <= 2 * 1024 * 1024 * 1024):
+        if disk_usage >= self._t.disk.usage_critical_percent or (
+            disk_free is not None and disk_free <= self._t.disk.free_critical_bytes
+        ):
             reasons.append(
                 GuardianEvaluationReason(
                     code="system_disk_critical",
@@ -204,7 +265,9 @@ class SystemEvaluator:
                     },
                 )
             )
-        elif disk_usage >= 85.0 or (disk_free is not None and disk_free <= 10 * 1024 * 1024 * 1024):
+        elif disk_usage >= self._t.disk.usage_warn_percent or (
+            disk_free is not None and disk_free <= self._t.disk.free_warn_bytes
+        ):
             reasons.append(
                 GuardianEvaluationReason(
                     code="system_disk_warn",
@@ -239,7 +302,7 @@ class SystemEvaluator:
             )
             return
 
-        if temperature >= 90.0:
+        if temperature >= self._t.temperature.critical_c:
             reasons.append(
                 GuardianEvaluationReason(
                     code="system_temperature_critical",
@@ -253,7 +316,7 @@ class SystemEvaluator:
                     },
                 )
             )
-        elif temperature >= 80.0:
+        elif temperature >= self._t.temperature.warn_c:
             reasons.append(
                 GuardianEvaluationReason(
                     code="system_temperature_warn",

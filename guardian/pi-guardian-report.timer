@@ -1,0 +1,13 @@
+[Unit]
+Description=PI Guardian Statusbericht alle 6 Stunden
+
+[Timer]
+# Alle 6 Stunden, plus einmal kurz nach dem Boot.
+OnBootSec=10min
+OnUnitActiveSec=6h
+# Verpasste Laeufe (z.B. nach Standby/Reboot) nachholen.
+Persistent=true
+Unit=pi-guardian-report.service
+
+[Install]
+WantedBy=timers.target

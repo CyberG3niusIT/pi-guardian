@@ -20,6 +20,8 @@ class GuardianSignalSource(StrEnum):
 
     ROUTER = "router"
     SYSTEM = "system"
+    SERVICE = "service"
+    CONTAINER = "container"
     STORAGE = "storage"
     JOURNAL = "journal"
     EXTERNAL = "external"

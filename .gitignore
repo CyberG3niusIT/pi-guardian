@@ -1,6 +1,7 @@
 # lokale Secrets
 router/.env
 ui/.env
+guardian/.env
 
 # Python
 router/.venv/

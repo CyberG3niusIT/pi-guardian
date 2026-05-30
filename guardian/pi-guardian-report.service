@@ -1,0 +1,13 @@
+[Unit]
+Description=PI Guardian periodischer Statusbericht
+After=network-online.target pi-guardian-guardian.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=alex
+Group=alex
+WorkingDirectory=/home/alex/pi-guardian
+EnvironmentFile=/home/alex/pi-guardian/guardian/.env
+Environment=PYTHONPATH=/home/alex/pi-guardian
+ExecStart=/home/alex/pi-guardian/.venv/bin/python -m guardian.app.reporting.cli --send

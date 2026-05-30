@@ -1,0 +1,77 @@
+# PI Guardian — Betriebskonfiguration
+# Editierbar ohne Code-Aenderung. Secrets (Telegram-Token, API-Key) gehoeren in guardian/.env.
+# Alle Schwellenwerte entsprechen den bisherigen, fest verdrahteten Defaults.
+
+thresholds:
+  cpu:
+    usage_warn_percent: 80.0
+    usage_critical_percent: 95.0
+    load_ratio_warn: 1.5
+    load_ratio_critical: 2.5
+  memory:
+    usage_warn_percent: 85.0
+    usage_critical_percent: 95.0
+    available_warn_bytes: 1073741824      # 1 GB
+    available_critical_bytes: 268435456   # 256 MB
+  swap:
+    usage_warn_percent: 60.0
+    usage_critical_percent: 90.0
+  disk:
+    usage_warn_percent: 85.0
+    usage_critical_percent: 95.0
+    free_warn_bytes: 10737418240          # 10 GB
+    free_critical_bytes: 2147483648       # 2 GB
+  temperature:
+    warn_c: 80.0
+    critical_c: 90.0
+
+# Kritische Targets: loesen Alerts (und ggf. Recovery-Aktionen) aus.
+watch:
+  systemd:
+    - pi-guardian-router
+    - kids-controller
+    - nginx
+    - docker
+  docker:
+    - ollama
+    - pi-guardian-router
+    - kids-controller-postgres
+    - homeassistant
+    - pihole
+    - nginx-proxy-manager
+
+# Nicht gelistete Dienste/Container werden nur beobachtet/geloggt (kein Alert).
+discovery:
+  enabled: true
+  alert: false
+
+docker:
+  restart_count_warn: 3
+
+# Recovery-Aktionen. Start defensiv: aktiviert, aber dry_run=true (nur simulieren/loggen).
+# Nach Verifikation dry_run auf false setzen, um echte Restarts auszufuehren.
+actions:
+  enabled: true
+  dry_run: true
+  cooldown_seconds: 600
+  max_attempts_per_window: 2
+  window_seconds: 3600
+  command_timeout_seconds: 30
+  allow:
+    - id: restart-router-service
+      kind: systemd_restart
+      target: pi-guardian-router
+      description: Router-systemd-Dienst neu starten
+    - id: restart-router-container
+      kind: docker_restart
+      target: pi-guardian-router
+      description: Router-Container neu starten
+    - id: restart-ollama
+      kind: docker_restart
+      target: ollama
+      description: Ollama-Container neu starten
+
+schedule:
+  interval_seconds: 45
+  loop_enabled: true
+  report_enabled: true

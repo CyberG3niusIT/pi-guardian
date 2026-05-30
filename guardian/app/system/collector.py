@@ -54,6 +54,13 @@ class SystemCollector:
             errors.append(f"memory read failed: {exc}")
 
         try:
+            swap_total_bytes, swap_free_bytes, swap_used_bytes, swap_usage_percent = self._read_swap()
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            swap_total_bytes = swap_free_bytes = swap_used_bytes = None
+            swap_usage_percent = None
+            errors.append(f"swap read failed: {exc}")
+
+        try:
             (
                 disk_total_bytes,
                 disk_free_bytes,
@@ -96,6 +103,10 @@ class SystemCollector:
             memory_available_bytes=memory_available_bytes,
             memory_used_bytes=memory_used_bytes,
             memory_usage_percent=memory_usage_percent,
+            swap_total_bytes=swap_total_bytes,
+            swap_free_bytes=swap_free_bytes,
+            swap_used_bytes=swap_used_bytes,
+            swap_usage_percent=swap_usage_percent,
             disk_mountpoint=self._mountpoint,
             disk_total_bytes=disk_total_bytes,
             disk_free_bytes=disk_free_bytes,
@@ -151,6 +162,27 @@ class SystemCollector:
         used = max(total - available, 0)
         usage_percent = (used / total) * 100.0 if total else None
         return total, available, used, usage_percent
+
+    def _read_swap(self) -> tuple[int | None, int | None, int | None, float | None]:
+        swap: dict[str, int] = {}
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) < 2 or parts[0].rstrip(":") not in ("SwapTotal", "SwapFree"):
+                continue
+            key = parts[0].rstrip(":")
+            value = int(parts[1])
+            unit = parts[2] if len(parts) > 2 else ""
+            swap[key] = value * 1024 if unit.lower() == "kb" else value
+
+        total = swap.get("SwapTotal")
+        free = swap.get("SwapFree")
+        if total is None or free is None:
+            return total, free, None, None
+        if total == 0:
+            return 0, 0, 0, 0.0
+        used = max(total - free, 0)
+        usage_percent = (used / total) * 100.0
+        return total, free, used, usage_percent
 
     def _read_disk_usage(self, mountpoint: str) -> tuple[int | None, int | None, int | None, float | None]:
         stat = os.statvfs(mountpoint)
