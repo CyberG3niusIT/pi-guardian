@@ -17,6 +17,11 @@ class GuardianDockerContainerState(BaseModel):
     health: str = "none"          # healthy / unhealthy / starting / none / unknown
     restart_count: int | None = None
     image: str = ""
+    cpu_percent: float | None = None
+    memory_usage: str | None = None      # z.B. "312MiB"
+    memory_percent: float | None = None
+    started_at: str | None = None        # ISO (inspect, nur Whitelist)
+    uptime_text: str | None = None       # docker ps RunningFor, z.B. "5 days"
     error: str | None = None
 
 

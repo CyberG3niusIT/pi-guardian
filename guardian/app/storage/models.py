@@ -34,6 +34,9 @@ class GuardianSnapshotInput(BaseModel):
     system_memory_usage_percent: float | None = None
     system_disk_usage_percent: float | None = None
     system_temperature_c: float | None = None
+    system_load_avg_1m: float | None = None
+    system_network_rx_bps: float | None = None
+    system_network_tx_bps: float | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 

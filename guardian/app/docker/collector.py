@@ -27,6 +27,15 @@ def _health_from_status(status_text: str) -> str:
     return "starting" if value == "health: starting" else value
 
 
+def _parse_percent(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return float(value.replace("%", "").strip())
+    except ValueError:
+        return None
+
+
 class DockerCollector:
     """Inspects whitelisted containers and discovers the rest."""
 
@@ -94,7 +103,46 @@ class DockerCollector:
                     self._build(name, payload, whitelisted=False, expected_running=False, inspect=False, errors=errors)
                 )
 
+        self._enrich_stats(containers, errors)
         return GuardianDockerCollectorState(containers=containers, errors=errors)
+
+    def _enrich_stats(self, containers: list[GuardianDockerContainerState], errors: list[str]) -> None:
+        """Add live CPU%/memory from a single `docker stats --no-stream` call."""
+
+        try:
+            raw = self._run(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}"])
+        except Exception as exc:  # noqa: BLE001 - stats is best-effort
+            errors.append(f"docker stats: {exc}")
+            return
+
+        stats: dict[str, dict[str, str]] = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            name = payload.get("Name", "")
+            if name:
+                stats[name] = payload
+
+        for c in containers:
+            entry = stats.get(c.name)
+            if entry is None:
+                continue
+            c.cpu_percent = _parse_percent(entry.get("CPUPerc"))
+            mem_perc = _parse_percent(entry.get("MemPerc"))
+            mem_usage = entry.get("MemUsage", "")
+            used = mem_usage.split("/")[0].strip() if mem_usage else ""
+            # "0B" / 0% bedeutet hier meist deaktiviertes cgroup-Memory-Accounting.
+            if used in ("", "0B") and (mem_perc in (None, 0.0)):
+                c.memory_usage = None
+                c.memory_percent = None
+            else:
+                c.memory_usage = used or None
+                c.memory_percent = mem_perc
 
     def _build(
         self,
@@ -111,6 +159,9 @@ class DockerCollector:
         image = payload.get("Image", "") or ""
         health = _health_from_status(status_text)
         restart_count: int | None = None
+        started_at: str | None = None
+        running_for = payload.get("RunningFor", "") or ""
+        uptime_text = running_for.replace(" ago", "").strip() or None
 
         if inspect:
             try:
@@ -118,18 +169,20 @@ class DockerCollector:
                     [
                         "inspect",
                         "--format",
-                        "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.RestartCount}}",
+                        "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.RestartCount}}|{{.State.StartedAt}}",
                         name,
                     ]
                 ).strip()
                 parts = detail.split("|")
-                if len(parts) == 3:
+                if len(parts) >= 3:
                     state = (parts[0] or state).lower()
                     health = parts[1] or health
                     try:
                         restart_count = int(parts[2])
                     except ValueError:
                         restart_count = None
+                if len(parts) >= 4 and parts[3]:
+                    started_at = parts[3]
             except Exception as exc:  # noqa: BLE001 - inspect is best-effort
                 errors.append(f"{name} inspect: {exc}")
 
@@ -143,6 +196,8 @@ class DockerCollector:
             health=health,
             restart_count=restart_count,
             image=image,
+            started_at=started_at,
+            uptime_text=uptime_text,
         )
 
     def _run(self, args: list[str]) -> str:

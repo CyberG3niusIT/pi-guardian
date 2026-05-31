@@ -15,6 +15,9 @@ class SystemCollector:
 
     def __init__(self, mountpoint: str = "/") -> None:
         self._mountpoint = mountpoint
+        # (monotonic_ts, iface, rx_bytes, tx_bytes) of the previous sample, for
+        # computing network throughput between two collects without extra sleeps.
+        self._last_net: tuple[float, str, int, int] | None = None
 
     async def collect(self) -> GuardianSystemCollectorState:
         return await asyncio.to_thread(self._collect_sync)
@@ -87,6 +90,13 @@ class SystemCollector:
             process_uptime_seconds = None
             errors.append(f"process uptime read failed: {exc}")
 
+        try:
+            network_interface, network_rx_bps, network_tx_bps = self._read_network_rates()
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            network_interface = None
+            network_rx_bps = network_tx_bps = None
+            errors.append(f"network read failed: {exc}")
+
         return GuardianSystemCollectorState(
             hostname=hostname,
             running_as_root=running_as_root,
@@ -114,6 +124,9 @@ class SystemCollector:
             disk_usage_percent=disk_usage_percent,
             temperature_c=temperature_c,
             temperature_source=temperature_source,
+            network_interface=network_interface,
+            network_rx_bytes_per_s=network_rx_bps,
+            network_tx_bytes_per_s=network_tx_bps,
             notes=notes,
             errors=errors,
         )
@@ -162,6 +175,53 @@ class SystemCollector:
         used = max(total - available, 0)
         usage_percent = (used / total) * 100.0 if total else None
         return total, available, used, usage_percent
+
+    def _read_network_rates(self) -> tuple[str | None, float | None, float | None]:
+        """Primary-interface throughput in bytes/s, computed between two collects."""
+
+        iface, rx, tx = self._read_primary_iface_counters()
+        now = time.monotonic()
+        rx_rate: float | None = None
+        tx_rate: float | None = None
+
+        last = self._last_net
+        if last is not None and iface is not None and last[1] == iface:
+            dt = now - last[0]
+            if dt > 0:
+                rx_delta = rx - last[2]
+                tx_delta = tx - last[3]
+                # Guard against counter resets (reboot, iface flap).
+                if rx_delta >= 0 and tx_delta >= 0:
+                    rx_rate = rx_delta / dt
+                    tx_rate = tx_delta / dt
+
+        if iface is not None:
+            self._last_net = (now, iface, rx, tx)
+        return iface, rx_rate, tx_rate
+
+    def _read_primary_iface_counters(self) -> tuple[str | None, int, int]:
+        """Pick the busiest non-loopback interface from /proc/net/dev."""
+
+        best_iface: str | None = None
+        best_rx = -1
+        best_tx = 0
+        for line in Path("/proc/net/dev").read_text(encoding="utf-8").splitlines():
+            if ":" not in line:
+                continue
+            name, _, rest = line.partition(":")
+            name = name.strip()
+            if name == "lo":
+                continue
+            fields = rest.split()
+            if len(fields) < 9:
+                continue
+            rx_bytes = int(fields[0])
+            tx_bytes = int(fields[8])
+            if rx_bytes > best_rx:
+                best_iface, best_rx, best_tx = name, rx_bytes, tx_bytes
+        if best_iface is None:
+            return None, 0, 0
+        return best_iface, best_rx, best_tx
 
     def _read_swap(self) -> tuple[int | None, int | None, int | None, float | None]:
         swap: dict[str, int] = {}

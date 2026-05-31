@@ -17,6 +17,8 @@ class GuardianSystemdUnitState(BaseModel):
     unit_file_state: str = "unknown"   # enabled / disabled / static / ...
     main_pid: int | None = None
     description: str = ""
+    active_since: str | None = None   # ActiveEnterTimestamp (systemd-Rohformat)
+    restart_count: int | None = None  # NRestarts
     error: str | None = None
 
 

@@ -71,6 +71,9 @@ class GuardianSQLiteStore:
     async def list_snapshots(self, limit: int = 20) -> GuardianSnapshotHistory:
         return await asyncio.to_thread(self._list_snapshots_sync, limit)
 
+    async def list_metric_points(self, limit: int = 120) -> list[dict]:
+        return await asyncio.to_thread(self._list_metric_points_sync, limit)
+
     async def record_alert(self, alert: GuardianAlertInput) -> GuardianAlertRecord:
         return await asyncio.to_thread(self._record_alert_sync, alert)
 
@@ -230,6 +233,9 @@ class GuardianSQLiteStore:
             "docker_summary": "TEXT",
             "systemd_reason_codes_json": "TEXT",
             "docker_reason_codes_json": "TEXT",
+            "system_load_avg_1m": "REAL",
+            "system_network_rx_bps": "REAL",
+            "system_network_tx_bps": "REAL",
         }
         for column, column_type in additions.items():
             if column not in existing:
@@ -317,9 +323,12 @@ class GuardianSQLiteStore:
                 system_memory_usage_percent,
                 system_disk_usage_percent,
                 system_temperature_c,
+                system_load_avg_1m,
+                system_network_rx_bps,
+                system_network_tx_bps,
                 evidence_json,
                 stored_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.checked_at.isoformat().replace("+00:00", "Z"),
@@ -347,6 +356,9 @@ class GuardianSQLiteStore:
                 snapshot.system_memory_usage_percent,
                 snapshot.system_disk_usage_percent,
                 snapshot.system_temperature_c,
+                snapshot.system_load_avg_1m,
+                snapshot.system_network_rx_bps,
+                snapshot.system_network_tx_bps,
                 self._json(snapshot.evidence),
                 stored_at,
             ),
@@ -433,6 +445,39 @@ class GuardianSQLiteStore:
                 (safe_limit,),
             ).fetchall()
         return GuardianSnapshotHistory(items=[self._row_to_snapshot_record(row) for row in rows])
+
+    def _list_metric_points_sync(self, limit: int) -> list[dict]:
+        if self._init_error is not None:
+            return []
+        safe_limit = max(min(int(limit), 1000), 1)
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT checked_at,
+                       system_cpu_usage_percent, system_memory_usage_percent,
+                       system_disk_usage_percent, system_temperature_c,
+                       system_load_avg_1m, system_network_rx_bps, system_network_tx_bps
+                FROM status_snapshots
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        points = [
+            {
+                "t": row["checked_at"],
+                "cpu": row["system_cpu_usage_percent"],
+                "memory": row["system_memory_usage_percent"],
+                "disk": row["system_disk_usage_percent"],
+                "temperature": row["system_temperature_c"],
+                "load": row["system_load_avg_1m"],
+                "net_rx_bps": row["system_network_rx_bps"],
+                "net_tx_bps": row["system_network_tx_bps"],
+            }
+            for row in rows
+        ]
+        points.reverse()  # oldest -> newest for charting
+        return points
 
     def _record_alert_sync(self, alert: GuardianAlertInput) -> GuardianAlertRecord:
         if self._init_error is not None:
@@ -657,6 +702,9 @@ class GuardianSQLiteStore:
             system_memory_usage_percent=row["system_memory_usage_percent"],
             system_disk_usage_percent=row["system_disk_usage_percent"],
             system_temperature_c=row["system_temperature_c"],
+            system_load_avg_1m=row["system_load_avg_1m"],
+            system_network_rx_bps=row["system_network_rx_bps"],
+            system_network_tx_bps=row["system_network_tx_bps"],
             evidence=self._json_loads(row["evidence_json"]),
             stored_at=self._parse_datetime(row["stored_at"]),
         )

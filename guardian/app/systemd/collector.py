@@ -13,7 +13,7 @@ import subprocess
 
 from guardian.app.systemd.models import GuardianSystemdCollectorState, GuardianSystemdUnitState
 
-_SHOW_PROPERTIES = "ActiveState,SubState,LoadState,UnitFileState,MainPID,Description"
+_SHOW_PROPERTIES = "ActiveState,SubState,LoadState,UnitFileState,MainPID,Description,ActiveEnterTimestamp,NRestarts"
 
 
 class SystemdCollector:
@@ -96,6 +96,15 @@ class SystemdCollector:
         except ValueError:
             parsed_pid = 0
 
+        try:
+            restart_count = int(props.get("NRestarts", "")) if props.get("NRestarts") else None
+        except ValueError:
+            restart_count = None
+
+        active_since = props.get("ActiveEnterTimestamp", "") or None
+        if active_since in ("", "n/a"):
+            active_since = None
+
         return GuardianSystemdUnitState(
             name=name,
             whitelisted=whitelisted,
@@ -106,6 +115,8 @@ class SystemdCollector:
             unit_file_state=props.get("UnitFileState", "unknown") or "unknown",
             main_pid=parsed_pid if parsed_pid > 0 else None,
             description=props.get("Description", "") or "",
+            active_since=active_since,
+            restart_count=restart_count,
         )
 
     def _list_failed_units(self, errors: list[str]) -> list[str]:

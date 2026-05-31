@@ -140,6 +140,9 @@ class GuardianHealthService:
             system_memory_usage_percent=system_state.memory_usage_percent,
             system_disk_usage_percent=system_state.disk_usage_percent,
             system_temperature_c=system_state.temperature_c,
+            system_load_avg_1m=system_state.load_avg_1m,
+            system_network_rx_bps=system_state.network_rx_bytes_per_s,
+            system_network_tx_bps=system_state.network_tx_bytes_per_s,
             evidence={
                 "router": {
                     "base_url": router_state.base_url,

@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 
 from guardian.app.actions import GuardianActionEngine, GuardianActionExecutor, GuardianActionRegistry
 from guardian.app.alerting import GuardianAlertingConfig, GuardianAlertingService, GuardianTelegramClient, GuardianTelegramConfig
-from guardian.app.api import actions_router, report_router, status_router
+from guardian.app.api import actions_router, dashboard_router, report_router, status_router
 from guardian.app.auth import GuardianAuthConfig, GuardianAuthGuard
 from guardian.app.collectors import RouterCollector
 from guardian.app.config import get_config
@@ -120,6 +120,7 @@ app = FastAPI(
 app.include_router(status_router)
 app.include_router(actions_router)
 app.include_router(report_router)
+app.include_router(dashboard_router)
 
 _DASHBOARD_PATH = Path(__file__).resolve().parent / "web" / "dashboard.html"
 

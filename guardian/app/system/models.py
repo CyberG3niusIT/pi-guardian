@@ -33,5 +33,8 @@ class GuardianSystemCollectorState(BaseModel):
     disk_usage_percent: float | None = None
     temperature_c: float | None = None
     temperature_source: str | None = None
+    network_interface: str | None = None
+    network_rx_bytes_per_s: float | None = None
+    network_tx_bytes_per_s: float | None = None
     notes: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
