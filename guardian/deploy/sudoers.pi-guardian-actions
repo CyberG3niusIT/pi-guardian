@@ -1,0 +1,15 @@
+# PI Guardian — Recovery-Aktionen (NOPASSWD nur fuer eng begrenzte Kommandos)
+# Installation:
+#   sudo install -m 0440 -o root -g root \
+#     /home/alex/pi-guardian/guardian/deploy/sudoers.pi-guardian-actions \
+#     /etc/sudoers.d/pi-guardian-actions
+#   sudo visudo -cf /etc/sudoers.d/pi-guardian-actions
+#
+# Es werden ausschliesslich 'systemctl restart <unit>' fuer namentlich
+# benannte, unkritische App-Dienste erlaubt. Bewusst NICHT enthalten:
+# docker.service und nginx.service (ein Neustart waere zu disruptiv) sowie
+# jedes generische/parametrisierbare Kommando. Docker-Container-Restarts
+# laufen ueber die docker-Gruppe und brauchen hier keinen Eintrag.
+
+alex ALL=(root) NOPASSWD: /usr/bin/systemctl restart pi-guardian-router
+alex ALL=(root) NOPASSWD: /usr/bin/systemctl restart kids-controller

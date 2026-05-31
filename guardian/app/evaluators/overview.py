@@ -4,14 +4,19 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
+from guardian.app.actions.models import GuardianActionReport
 from guardian.app.collectors.router_collector import GuardianRouterCollectorState
 from guardian.app.alerting.models import GuardianAlertDecision
 from guardian.app.core.domain import GuardianSeverity, GuardianSignalSource
+from guardian.app.docker.evaluator import GuardianDockerEvaluation
+from guardian.app.docker.models import GuardianDockerCollectorState
 from guardian.app.evaluators.common import GuardianEvaluationReason
 from guardian.app.evaluators.router_evaluator import GuardianRouterEvaluation
 from guardian.app.storage.models import GuardianPersistenceReceipt
 from guardian.app.system.evaluator import GuardianSystemEvaluation
 from guardian.app.system.models import GuardianSystemCollectorState
+from guardian.app.systemd.evaluator import GuardianSystemdEvaluation
+from guardian.app.systemd.models import GuardianSystemdCollectorState
 from guardian.app.policy.models import GuardianPolicyDecision
 
 
@@ -22,6 +27,8 @@ class GuardianOverviewEvaluation(BaseModel):
     reasons: list[GuardianEvaluationReason] = Field(default_factory=list)
     router: GuardianRouterEvaluation
     system: GuardianSystemEvaluation
+    systemd: GuardianSystemdEvaluation | None = None
+    docker: GuardianDockerEvaluation | None = None
 
 
 class GuardianStatusResponse(BaseModel):
@@ -33,10 +40,15 @@ class GuardianStatusResponse(BaseModel):
     router_evaluation: GuardianRouterEvaluation
     system: GuardianSystemCollectorState
     system_evaluation: GuardianSystemEvaluation
+    systemd: GuardianSystemdCollectorState | None = None
+    systemd_evaluation: GuardianSystemdEvaluation | None = None
+    docker: GuardianDockerCollectorState | None = None
+    docker_evaluation: GuardianDockerEvaluation | None = None
     evaluation: GuardianOverviewEvaluation
     persistence: GuardianPersistenceReceipt | None = None
     policy: GuardianPolicyDecision | None = None
     alerting: GuardianAlertDecision | None = None
+    action: GuardianActionReport | None = None
 
 
 class GuardianOverviewEvaluator:
@@ -46,45 +58,45 @@ class GuardianOverviewEvaluator:
         self,
         router_evaluation: GuardianRouterEvaluation,
         system_evaluation: GuardianSystemEvaluation,
+        systemd_evaluation: GuardianSystemdEvaluation | None = None,
+        docker_evaluation: GuardianDockerEvaluation | None = None,
     ) -> GuardianOverviewEvaluation:
         reasons: list[GuardianEvaluationReason] = []
 
-        status = GuardianSeverity.OK
-        summary = "Guardian is healthy."
+        # (domain code, source, evaluation) for each present subsystem.
+        domains: list[tuple[str, GuardianSignalSource, object]] = [
+            ("router", GuardianSignalSource.ROUTER, router_evaluation),
+            ("system", GuardianSignalSource.SYSTEM, system_evaluation),
+        ]
+        if systemd_evaluation is not None:
+            domains.append(("systemd", GuardianSignalSource.SERVICE, systemd_evaluation))
+        if docker_evaluation is not None:
+            domains.append(("docker", GuardianSignalSource.CONTAINER, docker_evaluation))
 
-        if router_evaluation.status == GuardianSeverity.CRITICAL or system_evaluation.status == GuardianSeverity.CRITICAL:
+        severities = [evaluation.status for _, _, evaluation in domains]
+        if GuardianSeverity.CRITICAL in severities:
             status = GuardianSeverity.CRITICAL
             summary = "Guardian has a critical condition."
-        elif router_evaluation.status == GuardianSeverity.WARN or system_evaluation.status == GuardianSeverity.WARN:
+        elif GuardianSeverity.WARN in severities:
             status = GuardianSeverity.WARN
             summary = "Guardian needs attention."
+        else:
+            status = GuardianSeverity.OK
+            summary = "Guardian is healthy."
 
-        if router_evaluation.status != GuardianSeverity.OK:
+        for code, source, evaluation in domains:
+            if evaluation.status == GuardianSeverity.OK:
+                continue
             reasons.append(
                 GuardianEvaluationReason(
-                    code=f"router_{router_evaluation.status.value}",
-                    summary=f"Router evaluation returned {router_evaluation.status.value}.",
-                    severity=router_evaluation.status,
-                    source=GuardianSignalSource.ROUTER,
-                    detail=router_evaluation.summary,
+                    code=f"{code}_{evaluation.status.value}",
+                    summary=f"{code} evaluation returned {evaluation.status.value}.",
+                    severity=evaluation.status,
+                    source=source,
+                    detail=evaluation.summary,
                     evidence={
-                        "reason_codes": [reason.code for reason in router_evaluation.reasons],
-                        "reason_count": len(router_evaluation.reasons),
-                    },
-                )
-            )
-
-        if system_evaluation.status != GuardianSeverity.OK:
-            reasons.append(
-                GuardianEvaluationReason(
-                    code=f"system_{system_evaluation.status.value}",
-                    summary=f"System evaluation returned {system_evaluation.status.value}.",
-                    severity=system_evaluation.status,
-                    source=GuardianSignalSource.SYSTEM,
-                    detail=system_evaluation.summary,
-                    evidence={
-                        "reason_codes": [reason.code for reason in system_evaluation.reasons],
-                        "reason_count": len(system_evaluation.reasons),
+                        "reason_codes": [reason.code for reason in evaluation.reasons],
+                        "reason_count": len(evaluation.reasons),
                     },
                 )
             )
@@ -93,13 +105,10 @@ class GuardianOverviewEvaluator:
             reasons.append(
                 GuardianEvaluationReason(
                     code="guardian_overall_ok",
-                    summary="Router and system evaluations are healthy.",
+                    summary="All evaluated subsystems are healthy.",
                     severity=GuardianSeverity.OK,
                     source=GuardianSignalSource.EXTERNAL,
-                    evidence={
-                        "router_status": router_evaluation.status,
-                        "system_status": system_evaluation.status,
-                    },
+                    evidence={code: evaluation.status for code, _, evaluation in domains},
                 )
             )
 
@@ -109,4 +118,6 @@ class GuardianOverviewEvaluator:
             reasons=reasons,
             router=router_evaluation,
             system=system_evaluation,
+            systemd=systemd_evaluation,
+            docker=docker_evaluation,
         )

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 
+from guardian.app.actions import GuardianActionEngine
 from guardian.app.alerting import GuardianAlertingService
 from guardian.app.collectors import RouterCollector
+from guardian.app.docker import DockerCollector, DockerEvaluator
 from guardian.app.evaluators import GuardianOverviewEvaluator, GuardianStatusResponse, RouterEvaluator
 from guardian.app.policy import GuardianPolicyEvaluator
 from guardian.app.storage import GuardianSQLiteStore, GuardianSnapshotInput
 from guardian.app.system import SystemCollector, SystemEvaluator
+from guardian.app.systemd import SystemdCollector, SystemdEvaluator
 
 
 class GuardianHealthService:
@@ -24,6 +27,11 @@ class GuardianHealthService:
         policy_evaluator: GuardianPolicyEvaluator,
         alerting_service: GuardianAlertingService | None = None,
         store: GuardianSQLiteStore,
+        systemd_collector: SystemdCollector | None = None,
+        systemd_evaluator: SystemdEvaluator | None = None,
+        docker_collector: DockerCollector | None = None,
+        docker_evaluator: DockerEvaluator | None = None,
+        action_engine: GuardianActionEngine | None = None,
     ) -> None:
         self._router_collector = router_collector
         self._router_evaluator = router_evaluator
@@ -33,15 +41,41 @@ class GuardianHealthService:
         self._policy_evaluator = policy_evaluator
         self._alerting_service = alerting_service
         self._store = store
+        self._systemd_collector = systemd_collector
+        self._systemd_evaluator = systemd_evaluator
+        self._docker_collector = docker_collector
+        self._docker_evaluator = docker_evaluator
+        self._action_engine = action_engine
 
     async def run(self, started_component: str, started_version: str) -> GuardianStatusResponse:
-        router_state, system_state = await asyncio.gather(
-            self._router_collector.collect(),
-            self._system_collector.collect(),
-        )
+        systemd_enabled = self._systemd_collector is not None and self._systemd_evaluator is not None
+        docker_enabled = self._docker_collector is not None and self._docker_evaluator is not None
+
+        tasks = [self._router_collector.collect(), self._system_collector.collect()]
+        if systemd_enabled:
+            tasks.append(self._systemd_collector.collect())
+        if docker_enabled:
+            tasks.append(self._docker_collector.collect())
+
+        results = await asyncio.gather(*tasks)
+        router_state = results[0]
+        system_state = results[1]
+        index = 2
+        systemd_state = results[index] if systemd_enabled else None
+        index += 1 if systemd_enabled else 0
+        docker_state = results[index] if docker_enabled else None
+
         router_evaluation = self._router_evaluator.evaluate(router_state)
         system_evaluation = self._system_evaluator.evaluate(system_state)
-        overview = self._overview_evaluator.evaluate(router_evaluation, system_evaluation)
+        systemd_evaluation = self._systemd_evaluator.evaluate(systemd_state) if systemd_enabled else None
+        docker_evaluation = self._docker_evaluator.evaluate(docker_state) if docker_enabled else None
+
+        overview = self._overview_evaluator.evaluate(
+            router_evaluation,
+            system_evaluation,
+            systemd_evaluation,
+            docker_evaluation,
+        )
         response = GuardianStatusResponse(
             status=overview.status,
             component=started_component,
@@ -50,6 +84,10 @@ class GuardianHealthService:
             router_evaluation=router_evaluation,
             system=system_state,
             system_evaluation=system_evaluation,
+            systemd=systemd_state,
+            systemd_evaluation=systemd_evaluation,
+            docker=docker_state,
+            docker_evaluation=docker_evaluation,
             evaluation=overview,
         )
         persistence = await self._store.record_cycle(self._build_snapshot_input(response))
@@ -57,7 +95,13 @@ class GuardianHealthService:
         alerting = None
         if self._alerting_service is not None:
             alerting = await self._alerting_service.evaluate_and_dispatch(response, policy, persistence)
-        return response.model_copy(update={"persistence": persistence, "policy": policy, "alerting": alerting})
+        enriched = response.model_copy(
+            update={"persistence": persistence, "policy": policy, "alerting": alerting}
+        )
+        action = None
+        if self._action_engine is not None:
+            action = await self._action_engine.consider(enriched, policy)
+        return enriched.model_copy(update={"action": action})
 
     def _build_snapshot_input(self, response: GuardianStatusResponse) -> GuardianSnapshotInput:
         router_state = response.router
@@ -73,6 +117,20 @@ class GuardianHealthService:
             overview_reason_codes=[reason.code for reason in response.evaluation.reasons],
             router_reason_codes=[reason.code for reason in response.router_evaluation.reasons],
             system_reason_codes=[reason.code for reason in response.system_evaluation.reasons],
+            systemd_status=response.systemd_evaluation.status if response.systemd_evaluation else None,
+            docker_status=response.docker_evaluation.status if response.docker_evaluation else None,
+            systemd_summary=response.systemd_evaluation.summary if response.systemd_evaluation else "",
+            docker_summary=response.docker_evaluation.summary if response.docker_evaluation else "",
+            systemd_reason_codes=(
+                [reason.code for reason in response.systemd_evaluation.reasons]
+                if response.systemd_evaluation
+                else []
+            ),
+            docker_reason_codes=(
+                [reason.code for reason in response.docker_evaluation.reasons]
+                if response.docker_evaluation
+                else []
+            ),
             router_access_state=router_state.access_state.value,
             router_readiness_state=router_state.readiness_state.value,
             router_reachable=router_state.reachable,
@@ -82,6 +140,9 @@ class GuardianHealthService:
             system_memory_usage_percent=system_state.memory_usage_percent,
             system_disk_usage_percent=system_state.disk_usage_percent,
             system_temperature_c=system_state.temperature_c,
+            system_load_avg_1m=system_state.load_avg_1m,
+            system_network_rx_bps=system_state.network_rx_bytes_per_s,
+            system_network_tx_bps=system_state.network_tx_bytes_per_s,
             evidence={
                 "router": {
                     "base_url": router_state.base_url,

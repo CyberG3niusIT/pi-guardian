@@ -1,18 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import Any
+# Re-export from core to keep a single definition while avoiding an import cycle
+# between the evaluators package and the docker/systemd evaluator modules.
+from guardian.app.core.evaluation import GuardianEvaluationReason
 
-from pydantic import BaseModel, Field
-
-from guardian.app.core.domain import GuardianSeverity, GuardianSignalSource
-
-
-class GuardianEvaluationReason(BaseModel):
-    code: str
-    summary: str
-    severity: GuardianSeverity
-    source: GuardianSignalSource
-    detail: str | None = None
-    evidence: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+__all__ = ["GuardianEvaluationReason"]

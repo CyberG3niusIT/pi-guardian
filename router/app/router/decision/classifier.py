@@ -12,6 +12,12 @@ _BLOCK_KEYWORDS = (
     "steal password",
     "dump database",
     "delete database",
+    "delete files",
+    "dateien löschen",
+    "rm -rf",
+    "truncate",
+    "drop table",
+    "drop database",
     "exfiltrate",
 )
 

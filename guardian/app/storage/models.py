@@ -19,6 +19,12 @@ class GuardianSnapshotInput(BaseModel):
     overview_reason_codes: list[str] = Field(default_factory=list)
     router_reason_codes: list[str] = Field(default_factory=list)
     system_reason_codes: list[str] = Field(default_factory=list)
+    systemd_status: GuardianSeverity | None = None
+    docker_status: GuardianSeverity | None = None
+    systemd_summary: str = ""
+    docker_summary: str = ""
+    systemd_reason_codes: list[str] = Field(default_factory=list)
+    docker_reason_codes: list[str] = Field(default_factory=list)
     router_access_state: str
     router_readiness_state: str
     router_reachable: bool
@@ -28,6 +34,9 @@ class GuardianSnapshotInput(BaseModel):
     system_memory_usage_percent: float | None = None
     system_disk_usage_percent: float | None = None
     system_temperature_c: float | None = None
+    system_load_avg_1m: float | None = None
+    system_network_rx_bps: float | None = None
+    system_network_tx_bps: float | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -106,3 +115,30 @@ class GuardianHistoryResponse(BaseModel):
     snapshots: list[GuardianSnapshotRecord] = Field(default_factory=list)
     transitions: list[GuardianStateTransitionRecord] = Field(default_factory=list)
     alerts: list[GuardianAlertRecord] = Field(default_factory=list)
+
+
+class GuardianActionInput(BaseModel):
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    action_id: str
+    kind: str
+    target: str
+    outcome: str
+    dry_run: bool = True
+    trigger: str = ""
+    trigger_snapshot_id: int | None = None
+    executed: bool = False
+    success: bool = False
+    exit_code: int | None = None
+    duration_ms: int | None = None
+    command: str = ""
+    error: str | None = None
+    source: str = "policy"
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class GuardianActionRecord(GuardianActionInput):
+    id: int
+
+
+class GuardianActionHistory(BaseModel):
+    items: list[GuardianActionRecord] = Field(default_factory=list)

@@ -1,6 +1,7 @@
 # lokale Secrets
 router/.env
 ui/.env
+guardian/.env
 
 # Python
 router/.venv/
@@ -32,3 +33,4 @@ ui/dist/
 *.sqlite3
 *.db
 .backup_2026-04-17_phase*/
+ui/dist-preview/

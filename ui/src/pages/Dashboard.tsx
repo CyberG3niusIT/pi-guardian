@@ -117,9 +117,10 @@ export function Dashboard({ connectionState, lastCheck, healthError, onRefresh }
               Routing-Lanes
             </div>
             <ul className="gap-list">
-              <li><code>llm_only</code> — Direktpfad mit Fairness-Prüfung</li>
-              <li><code>tool_required</code> — Read-Only Tools via /route</li>
-              <li><code>internet_required</code> — erkannt, kontrollierter Stop</li>
+              <li><code>llm</code> — LLM-Lane: lokale Modellantwort ohne Tool- oder Web-Ausführung</li>
+              <li><code>tool</code> — Tool-Lane: kontrollierte lokale Read-Only-Statusabfragen</li>
+              <li><code>internet_pending</code> — Web-Lane vorbereitet, im normalen Pfad bewusst gestoppt</li>
+              <li><code>blocked</code> — Kontrollzustand: vor Ausführung durch Policy blockiert</li>
             </ul>
           </div>
 

@@ -54,6 +54,8 @@ from app.router.auth import (
 )
 from app.router.classifier import select_model_for_prompt
 from app.router.clients import router as clients_router
+from app.router.decision.classifier import classify_request
+from app.router.decision.models import RequestClassification
 from app.router.errors import RouterApiError
 from app.router.history import create_route_history_entry, list_route_history
 from app.router.model_registry import sync_model_registry
@@ -126,6 +128,8 @@ ADMIN_ROUTES = {
     "/models/delete",
     "/settings",
     "/status/service",
+    "/v1/models",
+    "/v1/chat/completions",
 }
 
 
@@ -233,6 +237,54 @@ def _prompt_from_chat_payload(payload: dict) -> str:
     return "\n".join(other_messages)
 
 
+def _openai_messages_to_ollama(messages: list) -> list[dict]:
+    ollama_messages: list[dict] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        content = _extract_text_content(message.get("content"))
+        if role not in {"system", "user", "assistant", "tool"} or not content:
+            continue
+        ollama_messages.append({"role": role, "content": content})
+    return ollama_messages
+
+
+def _openai_chat_response(ollama_result: dict, model: str) -> dict:
+    content = ""
+    message = ollama_result.get("message")
+    if isinstance(message, dict):
+        message_content = message.get("content")
+        if isinstance(message_content, str):
+            content = message_content
+    if not content:
+        response_text = ollama_result.get("response")
+        if isinstance(response_text, str):
+            content = response_text
+
+    done_reason = ollama_result.get("done_reason")
+    finish_reason = "stop" if done_reason in {None, "", "stop"} else str(done_reason)
+    created = int(time.time())
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": created,
+        "model": ollama_result.get("model") or model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+
+
 async def _proxy_to_ollama(
     path: str,
     payload: dict,
@@ -241,8 +293,40 @@ async def _proxy_to_ollama(
     client_name: str | None,
 ):
     request_id = str(uuid.uuid4())
-    selected_model = select_model_for_prompt(prompt)
+    decision = classify_request(RouteRequest(prompt=prompt))
+    if decision.classification is RequestClassification.BLOCKED:
+        create_route_history_entry(
+            session,
+            request_id=request_id,
+            prompt_preview=_prompt_preview(prompt),
+            model=None,
+            success=False,
+            error_code="request_blocked",
+            client_name=client_name,
+            duration_ms=0,
+            decision_classification=decision.classification.value,
+            decision_reasons=decision.reasons,
+            decision_tool_hints=decision.tool_hints,
+            decision_internet_hints=decision.internet_hints,
+            execution_mode="llm",
+            execution_status="failed",
+            execution_error="request_blocked",
+        )
+        raise RouterApiError(
+            message="Anfrage wurde durch die vorgelagerte Entscheidungslogik blockiert",
+            status_code=403,
+            code="request_blocked",
+            request_id=request_id,
+            retryable=False,
+        )
+
     outgoing_payload = dict(payload)
+    requested_model = outgoing_payload.get("model")
+    selected_model = (
+        requested_model.strip()
+        if isinstance(requested_model, str) and requested_model.strip()
+        else select_model_for_prompt(prompt)
+    )
     outgoing_payload["model"] = selected_model
     stream = bool(outgoing_payload.get("stream"))
     started_at = time.perf_counter()
@@ -375,6 +459,72 @@ async def ollama_chat(
 
 
 @app.get(
+    "/v1/models",
+    dependencies=[Depends(require_access("/v1/models"))],
+)
+async def openai_models() -> dict:
+    models = await fetch_models()
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model.get("name", ""),
+                "object": "model",
+                "created": 0,
+                "owned_by": "pi-guardian",
+            }
+            for model in models
+            if model.get("name")
+        ],
+    }
+
+
+@app.post(
+    "/v1/chat/completions",
+    dependencies=[Depends(require_access("/v1/chat/completions"))],
+)
+async def openai_chat_completions(
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="JSON-Objekt erwartet")
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        raise HTTPException(status_code=422, detail="Feld 'messages' fehlt oder ist ungültig")
+    prompt = _prompt_from_chat_payload(payload)
+    if not prompt.strip():
+        raise HTTPException(status_code=422, detail="Feld 'messages' enthält keinen nutzbaren Text")
+
+    client_name = authorize_protected_request(request, session, "/v1/chat/completions")
+    requested_model = payload.get("model")
+    selected_model = (
+        requested_model.strip()
+        if isinstance(requested_model, str) and requested_model.strip()
+        else select_model_for_prompt(prompt)
+    )
+    ollama_payload = {
+        "model": selected_model,
+        "prompt": prompt,
+        "stream": False,
+    }
+    if "temperature" in payload:
+        ollama_payload["options"] = {"temperature": payload["temperature"]}
+    response = await _proxy_to_ollama(
+        "/api/generate",
+        ollama_payload,
+        prompt,
+        session,
+        client_name,
+    )
+    if not isinstance(response, JSONResponse):
+        raise HTTPException(status_code=422, detail="Streaming wird für OpenAI-Kompatibilität noch nicht unterstützt")
+    ollama_result = json.loads(response.body.decode("utf-8"))
+    return JSONResponse(content=_openai_chat_response(ollama_result, selected_model))
+
+
+@app.get(
     "/status/service",
     response_model=ServiceStatus,
     dependencies=[Depends(require_access("/status/service"))],
@@ -488,6 +638,8 @@ async def integration_guide() -> IntegrationGuide:
             "/api/tags",
             "/api/generate",
             "/api/chat",
+            "/v1/models",
+            "/v1/chat/completions",
             "/models/registry",
             "/models/pull",
         ],
@@ -511,6 +663,8 @@ async def integration_guide() -> IntegrationGuide:
                 "/api/tags",
                 "/api/generate",
                 "/api/chat",
+                "/v1/models",
+                "/v1/chat/completions",
                 "/models/registry",
                 "/models/pull",
             ],

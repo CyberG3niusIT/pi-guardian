@@ -22,6 +22,38 @@ type ClientFormState = {
   can_use_internet: boolean;
 };
 
+type ClientTemplate = {
+  label: string;
+  description: string;
+  form: ClientFormState;
+};
+
+const ROUTER_BASE_PATHS = [
+  '/route',
+  '/health',
+  '/settings',
+  '/models',
+  '/models/select',
+  '/models/registry',
+  '/models/pull',
+  '/models/delete',
+  '/status/service',
+  '/clients',
+  '/history',
+  '/logs',
+  '/agents',
+  '/skills',
+  '/actions',
+  '/memory',
+  '/api/tags',
+  '/api/generate',
+  '/api/chat',
+  '/v1/models',
+  '/v1/chat/completions',
+] as const;
+
+const PUBLIC_ROUTE_PREFIX = '/api';
+
 const EMPTY_FORM: ClientFormState = {
   name: '',
   description: '',
@@ -33,15 +65,109 @@ const EMPTY_FORM: ClientFormState = {
   can_use_internet: false,
 };
 
+const CLIENT_TEMPLATES: ClientTemplate[] = [
+  {
+    label: 'Mobile Light-Agent',
+    description: 'Handy oder Tablet fuer lokale KI, Agenten, Skills, Verlauf und Diagnose.',
+    form: {
+      name: 'Mobile_Light_Agent',
+      description: 'Mobiler LAN-Client fuer AirPI/Router Light-Agent-Aufgaben',
+      active: true,
+      allowed_ip: '192.168.50.0/24',
+      allowed_routes_text: routesToText([
+        '/route',
+        '/health',
+        '/status/service',
+        '/agents',
+        '/skills',
+        '/actions',
+        '/history',
+        '/memory',
+        '/api/tags',
+        '/api/generate',
+        '/api/chat',
+        '/v1/models',
+        '/v1/chat/completions',
+      ]),
+      can_use_llm: true,
+      can_use_tools: true,
+      can_use_internet: false,
+    },
+  },
+  {
+    label: 'Kids Controller',
+    description: 'Serverseitiger Integrator mit kontrolliertem Router-Zugriff.',
+    form: {
+      name: 'Kids_Controller',
+      description: 'Persistenter externer Client fuer den Kids Controller',
+      active: true,
+      allowed_ip: '192.168.50.0/24',
+      allowed_routes_text: routesToText(['/route', '/health', '/status/service', '/history']),
+      can_use_llm: true,
+      can_use_tools: true,
+      can_use_internet: false,
+    },
+  },
+  {
+    label: 'Mailtracker Bridge',
+    description: 'Private forensische Bruecke, nur Analyseaufrufe und Health.',
+    form: {
+      name: 'AirPI_Mailtracker_Bridge',
+      description: 'Lokale Mailtracker-Bruecke fuer deterministische Berichte und KI-Interpretation',
+      active: true,
+      allowed_ip: '192.168.50.10',
+      allowed_routes_text: routesToText(['/route', '/health']),
+      can_use_llm: true,
+      can_use_tools: false,
+      can_use_internet: false,
+    },
+  },
+  {
+    label: 'Admin UI',
+    description: 'Vollzugriff fuer die lokale Router-Oberflaeche im Heimnetz.',
+    form: {
+      name: 'Router_Admin_UI_Persistent',
+      description: 'Dedizierter persistenter Admin-Client fuer die Router-UI',
+      active: true,
+      allowed_ip: '192.168.50.0/24',
+      allowed_routes_text: routesToText([...ROUTER_BASE_PATHS]),
+      can_use_llm: true,
+      can_use_tools: true,
+      can_use_internet: true,
+    },
+  },
+];
+
 function routesToText(routes: string[]): string {
   return routes.join(', ');
 }
 
+function normalizeRoute(route: string): string {
+  const trimmed = route.trim();
+  if (!trimmed) return '';
+  const withSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  if (ROUTER_BASE_PATHS.includes(withSlash as (typeof ROUTER_BASE_PATHS)[number])) {
+    return withSlash;
+  }
+  if (withSlash.startsWith(`${PUBLIC_ROUTE_PREFIX}/api/`)) {
+    return withSlash.slice(PUBLIC_ROUTE_PREFIX.length);
+  }
+  if (withSlash.startsWith(`${PUBLIC_ROUTE_PREFIX}/`)) {
+    return withSlash.slice(PUBLIC_ROUTE_PREFIX.length);
+  }
+  return withSlash;
+}
+
 function parseRoutes(text: string): string[] {
-  return text
+  const routes = text
     .split(',')
-    .map((route) => route.trim())
+    .map(normalizeRoute)
     .filter(Boolean);
+  return [...new Set(routes)];
+}
+
+function toPublicPath(route: string): string {
+  return `${PUBLIC_ROUTE_PREFIX}${route}`;
 }
 
 function clientToForm(client: ClientRead): ClientFormState {
@@ -147,6 +273,13 @@ export function Clients() {
     resetForm();
   }
 
+  function applyTemplate(template: ClientTemplate) {
+    setNotice(`Vorlage "${template.label}" geladen.`);
+    setCreatedApiKey('');
+    setEditingId(null);
+    setForm(template.form);
+  }
+
   function startEdit(client: ClientRead) {
     setNotice('');
     setCreatedApiKey('');
@@ -159,6 +292,12 @@ export function Clients() {
     if (!form.allowed_ip.trim()) return 'IP / Subnetz darf nicht leer sein.';
     if (parseRoutes(form.allowed_routes_text).length === 0) {
       return 'Mindestens eine Route muss angegeben werden.';
+    }
+    const unknownRoutes = parseRoutes(form.allowed_routes_text).filter(
+      (route) => !ROUTER_BASE_PATHS.includes(route as (typeof ROUTER_BASE_PATHS)[number]),
+    );
+    if (unknownRoutes.length > 0) {
+      return `Unbekannte Route: ${unknownRoutes.join(', ')}`;
     }
     return null;
   }
@@ -233,11 +372,15 @@ export function Clients() {
         <Card title="Registrierte Clients" tag={`${clients.length} EINTRÄGE`}>
           <div className="kv">
             <span className="kv__label">Quelle</span>
-            <span className="kv__value kv__value--highlight">Router-Backend /clients</span>
+            <span className="kv__value kv__value--highlight">UI liest /api/clients</span>
           </div>
           <div className="kv">
             <span className="kv__label">Persistenz</span>
             <span className="kv__value">SQLite `router/data/pi_guardian.db`</span>
+          </div>
+          <div className="kv">
+            <span className="kv__label">Speicherformat</span>
+            <span className="kv__value">Router-intern ohne /api-Prefix</span>
           </div>
           <div className="kv">
             <span className="kv__label">Kids Controller sichtbar</span>
@@ -250,19 +393,23 @@ export function Clients() {
         <Card title="Hinweise" tag="ECHTE DATEN">
           <div className="kv">
             <span className="kv__label">Lesen</span>
-            <span className="kv__value">GET /clients</span>
+            <span className="kv__value">GET /api/clients</span>
           </div>
           <div className="kv">
             <span className="kv__label">Anlegen</span>
-            <span className="kv__value">POST /clients</span>
+            <span className="kv__value">POST /api/clients</span>
           </div>
           <div className="kv">
             <span className="kv__label">Aktualisieren</span>
-            <span className="kv__value">PUT /clients/{'{id}'}</span>
+            <span className="kv__value">PUT /api/clients/{'{id}'}</span>
           </div>
           <div className="kv">
             <span className="kv__label">Löschen</span>
-            <span className="kv__value">DELETE /clients/{'{id}'}</span>
+            <span className="kv__value">DELETE /api/clients/{'{id}'}</span>
+          </div>
+          <div className="kv">
+            <span className="kv__label">Client-Erlaubnis</span>
+            <span className="kv__value">z.B. /route statt /api/route</span>
           </div>
         </Card>
       </div>
@@ -335,7 +482,11 @@ export function Clients() {
 
                   <div className="entity-card__meta-grid">
                     <MetaItem label="IP / Host" value={client.allowed_ip} />
-                    <MetaItem label="Routen" value={routesToText(client.allowed_routes ?? []) || '–'} />
+                    <MetaItem label="Routen intern" value={routesToText(client.allowed_routes ?? []) || '–'} />
+                    <MetaItem
+                      label="HTTP über UI"
+                      value={routesToText((client.allowed_routes ?? []).map(toPublicPath)) || '–'}
+                    />
                     <MetaItem label="LLM" value={client.can_use_llm ? 'Ja' : 'Nein'} plain />
                     <MetaItem label="Tools" value={client.can_use_tools ? 'Ja' : 'Nein'} plain />
                     <MetaItem label="Internet" value={client.can_use_internet ? 'Ja' : 'Nein'} plain />
@@ -396,6 +547,29 @@ export function Clients() {
         title={editingId === null ? 'Client anlegen' : `Client bearbeiten: ${form.name || editingId}`}
         tag={editingId === null ? 'NEU' : 'EDIT'}
       >
+        {editingId === null && (
+          <div className="entity-card__note-list" style={{ marginBottom: '1rem' }}>
+            <div className="entity-card__note">
+              Vorlagen setzen passende Routen, Rechte und IP-Bereiche. Gespeichert werden Router-interne Pfade ohne
+              /api-Prefix, auch wenn du versehentlich /api/... einträgst.
+            </div>
+            <div className="entity-card__pill-list">
+              {CLIENT_TEMPLATES.map((template) => (
+                <button
+                  key={template.label}
+                  className="btn btn--sm btn--ghost"
+                  onClick={() => applyTemplate(template)}
+                  title={template.description}
+                  type="button"
+                  disabled={saving}
+                >
+                  {template.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="grid grid--2">
           <div className="form-group">
             <label className="form-label">Name</label>
@@ -428,13 +602,17 @@ export function Clients() {
         </div>
 
         <div className="form-group">
-          <label className="form-label">Erlaubte Routen (kommasepariert)</label>
+          <label className="form-label">Erlaubte Router-Routen (kommasepariert)</label>
           <textarea
             className="form-input form-input--textarea"
             value={form.allowed_routes_text}
             onChange={(e) => setForm({ ...form, allowed_routes_text: e.target.value })}
             placeholder="/route, /health, /clients"
           />
+          <div className="entity-card__note" style={{ marginTop: '0.5rem' }}>
+            Browser nutzt z.B. /api/route. Client-Rechte speichern den Router-Pfad /route, weil Nginx /api/ beim Proxy
+            entfernt. Gueltige Routen: {routesToText([...ROUTER_BASE_PATHS])}
+          </div>
         </div>
 
         <div className="toggle-row" style={{ marginBottom: '1rem' }}>

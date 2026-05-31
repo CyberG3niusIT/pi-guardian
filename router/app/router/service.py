@@ -1,6 +1,7 @@
 import json
 import time
 import uuid
+from typing import Any
 
 from sqlmodel import Session
 
@@ -20,6 +21,14 @@ from app.router.policy import apply_client_policy
 from app.router.ollama_client import generate_with_ollama
 from app.schemas.request_models import RouteRequest
 from app.schemas.response_models import RouteResponse
+
+
+_FAST_MODEL_ALIASES = {"fast", "fast-lane", "airpi-fast"}
+_ROUTE_JSON_KEYS = ["decision", "risk", "reason"]
+_ALLOWED_ROUTE_DECISIONS = {"allow", "block", "review", "tool_required"}
+_ALLOWED_ROUTE_RISKS = {"low", "medium", "high"}
+_BLOCK_ROUTE_DECISIONS = {"block", "review", "tool_required"}
+_BLOCK_ROUTE_RISKS = {"high"}
 
 
 def _prompt_preview(prompt: str, limit: int = 160) -> str:
@@ -64,6 +73,83 @@ def _run_kids_controller_repetition_review(observation: dict) -> dict | None:
     if not result.success or not isinstance(result.output, dict):
         return None
     return result.output
+
+
+def _is_fast_lane_model(model: str) -> bool:
+    configured_fast = getattr(settings, "FAST_MODEL", "fast")
+    return model.lower() in _FAST_MODEL_ALIASES or model == configured_fast
+
+
+def _parse_route_json(raw_response: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(raw_response)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    if any(key not in parsed for key in _ROUTE_JSON_KEYS):
+        return None
+    decision = str(parsed.get("decision", "")).lower()
+    risk = str(parsed.get("risk", "")).lower()
+    if decision not in _ALLOWED_ROUTE_DECISIONS or risk not in _ALLOWED_ROUTE_RISKS:
+        return None
+    return {
+        "decision": decision,
+        "risk": risk,
+        "reason": str(parsed.get("reason", "")),
+    }
+
+
+def _route_json_requires_block(route_json: dict[str, Any]) -> bool:
+    decision = str(route_json.get("decision", "")).lower()
+    risk = str(route_json.get("risk", "")).lower()
+    return decision in _BLOCK_ROUTE_DECISIONS or risk in _BLOCK_ROUTE_RISKS
+
+
+async def _generate_llm_response(
+    *,
+    model: str,
+    prompt: str,
+    request_id: str,
+    stream: bool,
+) -> tuple[dict, bool, dict[str, Any] | None]:
+    if not _is_fast_lane_model(model):
+        result = await generate_with_ollama(
+            model=model,
+            prompt=prompt,
+            request_id=request_id,
+            stream=stream,
+        )
+        return result, False, None
+
+    try:
+        result = await generate_with_ollama(
+            model=model,
+            prompt=prompt,
+            request_id=request_id,
+            stream=False,
+            format="json",
+            required_json_keys=_ROUTE_JSON_KEYS,
+        )
+    except RouterApiError:
+        fallback = await generate_with_ollama(
+            model=settings.DEFAULT_MODEL,
+            prompt=prompt,
+            request_id=request_id,
+            stream=False,
+        )
+        return fallback, True, None
+
+    route_json = _parse_route_json(str(result.get("response", "")))
+    if route_json is None:
+        fallback = await generate_with_ollama(
+            model=settings.DEFAULT_MODEL,
+            prompt=prompt,
+            request_id=request_id,
+            stream=False,
+        )
+        return fallback, True, None
+    return result, False, route_json
 
 
 async def route_prompt(
@@ -297,7 +383,7 @@ async def route_prompt(
             )
 
     try:
-        result = await generate_with_ollama(
+        result, escalated_from_fast_lane, route_json = await _generate_llm_response(
             model=selected_model,
             prompt=request.prompt,
             request_id=request_id,
@@ -305,23 +391,52 @@ async def route_prompt(
         )
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         resolved_model = result.get("model", selected_model)
+        decision_reasons = list(decision.reasons)
+        execution_status = "not_executed"
+        execution_error = None
+        success = True
+
+        if escalated_from_fast_lane:
+            decision_reasons.append("Fast-Lane-JSON ungueltig, auf Default-Modell eskaliert")
+            resolved_model = result.get("model", settings.DEFAULT_MODEL)
+
+        if route_json is not None:
+            decision_reasons.append(
+                f"Fast-Lane-JSON validiert: decision={route_json['decision']} risk={route_json['risk']}"
+            )
+            if _route_json_requires_block(route_json):
+                success = False
+                execution_status = "failed"
+                execution_error = "fast_lane_policy_block"
+
         create_route_history_entry(
             session,
             request_id=request_id,
             prompt_preview=preview,
             model=resolved_model,
-            success=True,
-            error_code=None,
+            success=success,
+            error_code=None if success else "fast_lane_policy_block",
             client_name=resolved_client_name,
             duration_ms=duration_ms,
             decision_classification=decision.classification.value,
-            decision_reasons=decision.reasons,
+            decision_reasons=decision_reasons,
             decision_tool_hints=decision.tool_hints,
             decision_internet_hints=decision.internet_hints,
             policy_trace=policy_trace,
             execution_mode="llm",
-            execution_status="not_executed",
+            execution_status=execution_status,
+            execution_error=execution_error,
         )
+        if not success:
+            raise RouterApiError(
+                message="Fast-Lane-Routing hat die Anfrage sicherheitshalber blockiert.",
+                status_code=403,
+                code="fast_lane_policy_block",
+                request_id=request_id,
+                model=resolved_model,
+                retryable=False,
+            )
+
         return RouteResponse(
             request_id=request_id,
             model=resolved_model,
@@ -330,13 +445,16 @@ async def route_prompt(
             done_reason=result.get("done_reason"),
             duration_ms=duration_ms,
             decision_classification=decision.classification.value,
-            decision_reasons=decision.reasons,
+            decision_reasons=decision_reasons,
             decision_tool_hints=decision.tool_hints,
             decision_internet_hints=decision.internet_hints,
             execution_mode="llm",
             policy_trace=policy_trace,
+            execution_error=execution_error,
         )
     except RouterApiError as exc:
+        if exc.code == "fast_lane_policy_block":
+            raise
         create_route_history_entry(
             session,
             request_id=request_id,
